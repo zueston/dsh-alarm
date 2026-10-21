@@ -2,19 +2,19 @@
  *
  * 自包含：客户端模块系统每个包只加载一个 bundle，所以这里不 import 任何兄弟
  * 文件，只 `require('react')`。
- * 写法照抄 dsh-switchman 的 client.js：
+ * 入口写法：
  *   window.__ModuleLoader__.load({ id, factory(require) { ... return { inject, apply } } })
  *
  * 注册的槽位（恰好四个，**不注册 main**）：
- *   1. sidebar.panellist       —— 主窗口侧边栏「报警提醒」铃铛入口（order 33，
- *      排在 dsh-switchman「国内/国际」的 32 之后）。点它只开浮层，不切主区域。
+ *   1. sidebar.panellist       —— 主窗口侧边栏「报警提醒」铃铛入口（order 33）。
+ *      点它只开浮层，不切主区域。
  *   2. shell.overlay           —— 设置弹窗本体（宿主官方浮层槽位，order 120）。
  *      **不再用 portal 挂 body**：那条路一弹窗就白屏，改成槽位后稳定。
  *   3. settings.section        —— 设置页里的一张「报警提醒（dsh-alarm）」卡片
  *   4. plugins.bundle.config   —— 「插件」页里同一个组件的第二入口
  *  **绝不注册 `main` 槽位**：注册了就等于把「报警提醒」变成宿主可选的中间面板，
  *  一选中主区域就渲染成空——用户实测的「点铃铛后会话界面白屏」就是这么来的。
- *  对照 orchestrator2-region-switch：它同样只注册 sidebar.panellist + shell.overlay。
+ *  宿主浮层类插件同理，只应注册 sidebar.panellist + shell.overlay 这两个槽位。
  *   所有槽位组件都过 `guarded()` 错误边界：任何一块渲染崩了只让这块变空，
  *   绝不让整页白屏（白屏就是 React 卸载整棵宿主树的结果）。
  *
@@ -41,7 +41,7 @@ window.__ModuleLoader__.load({
 
 		/** 渲染护栏：把组件包进错误边界，崩了只让这一块变空，绝不白屏整页。
 		 *
-		 *  形态照抄 orchestrator2-region-switch 的 client.js（guarded）：
+		 *  形态：
 		 *  class 错误边界 + `getDerivedStateFromError` + `componentDidCatch` 里打一条
 		 *  console.error，`render()` 在失败态返回 null。
 		 *
@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
 		/** 空选项表的共享常量：缓存与组件都复用它，避免每次渲染造新对象。 */
 		const EMPTY_OPTIONS = { wavs: [], voices: [] };
 
-		/** 报警配置的**模块级缓存**（形态照 orchestrator2-region-switch 的 store）。
+		/** 报警配置的**模块级缓存**（模块级 store 形态）。
 		 *
 		 *  **为什么要有**：`AlarmSettingsCard` 原先每次挂载都自己 `GET config`，于是每次
 		 *  点侧栏「报警提醒」都要等一次网络往返，界面上先闪一帧「正在载入报警设置…」
@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/** 订阅缓存：缓存一变就重渲染（`useState` + 订阅，与 region-switch 的 useStore 同形）。 */
+		/** 订阅缓存：缓存一变就重渲染（`useState` + 订阅）。 */
 		function useConfigCache() {
 			const [snapshot, setSnapshot] = React.useState(configCache);
 			React.useEffect(() => {
@@ -1393,7 +1393,7 @@ window.__ModuleLoader__.load({
 		return {
 			inject: ['slots'],
 			apply(ctx) {
-				// **预加载配置**（照 orchestrator2-region-switch 的 apply()）：插件一装上就把配置
+				// **预加载配置**：插件一装上就把配置
 				// 拉进模块级缓存，等用户点侧栏「报警提醒」时数据已经在内存里——弹窗瞬开，
 				// 不会再先闪一帧「正在载入报警设置…」。失败不抛（缓存落 error，卡片打开时重试）。
 				try {
