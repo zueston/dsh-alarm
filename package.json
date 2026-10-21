@@ -1,0 +1,55 @@
+{
+  "name": "dsh-alarm",
+  "version": "1.1.0",
+  "description": "DSH 独立提醒报警插件：root 会话需要用户裁决或本轮结束时，用 PowerShell 播放铃声、TTS 语音并弹窗；带可视化设置页与侧边栏入口。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "host",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "alarm",
+    "notification"
+  ],
+  "license": "MIT",
+  "author": "zueston",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zueston/dsh-alarm.git"
+  },
+  "homepage": "https://github.com/zueston/dsh-alarm#readme",
+  "bugs": {
+    "url": "https://github.com/zueston/dsh-alarm/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

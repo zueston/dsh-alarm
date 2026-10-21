@@ -1,0 +1,44 @@
+[
+  {
+    "id": "explicit-zh-now",
+    "note": "应当提醒｜明确要求重启（中文，结论句直接叫你现在重启）",
+    "expected": true,
+    "excerpt": "插件的三步收尾我都做完并自检通过了，**现在可以重启 DSH**。重启前请勿刷新界面，否则会看到旧状态。"
+  },
+  {
+    "id": "explicit-zh-please",
+    "note": "应当提醒｜明确要求重启（中文，命令式「请重启」+ 后续步骤）",
+    "expected": true,
+    "excerpt": "改动已落地：注册文件与目录联接都更新完了。请重启 DSH 后按下面的最小步骤实测，任一步不对就把现象发我。"
+  },
+  {
+    "id": "negated",
+    "note": "不应提醒｜否定式「不需要重启」（改的是常量，下一轮就生效）",
+    "expected": false,
+    "excerpt": "这次只改了一个文案常量，**不需要重启 DSH**：下一轮对话就能看到新文案。"
+  },
+  {
+    "id": "future",
+    "note": "不应提醒｜未来时「等我改完再重启」（还没到重启的时候）",
+    "expected": false,
+    "excerpt": "插件改名和目录联接的改动我还没动手；**等我改完并自检通过后再通知你重启 DSH**。在那之前请不要刷新界面。"
+  },
+  {
+    "id": "quoted-in-fence",
+    "note": "不应提醒｜重启只出现在围栏代码块的引用里（思考链/文档引用不算本轮结论）",
+    "expected": false,
+    "excerpt": "结论：这次只调了设置页的列宽，不影响宿主加载。下面这段是我从文档里摘的说明，供你参考：\n\n```text\n修改插件注册后需要重启 DSH 才会生效。\n```\n\n如果你没有别的意见，我就接着做下一项。"
+  },
+  {
+    "id": "english-restart",
+    "note": "应当提醒｜英文 restart the app（同一个判定器，英文说法也要命中）",
+    "expected": true,
+    "excerpt": "The plugin rename is done and verified locally. Please restart the app so the new bundle gets loaded; no other action needed."
+  },
+  {
+    "id": "unrelated",
+    "note": "不应提醒｜与重启无关的普通文本（文档链接与错别字）",
+    "expected": false,
+    "excerpt": "本轮只更新了三条文档链接和一处错别字，测试套件全绿。没有别的待办，你可以直接看结论段。"
+  }
+]
