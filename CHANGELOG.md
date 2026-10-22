@@ -13,3 +13,4 @@
 - 语音走 Windows 自带 SAPI，自动区分「本机离线音色」与「需要联网的 Neural 音色」，网络音色失败时回退本机音色。
 - 投递全部在隐藏窗口的独立进程里完成，失败只记 `<DSH_HOME>\alarm\alarm.log`（JSONL，512 KB 轮转），绝不打断对话。
 - 离线自测：`test/verify-routes.mjs`（路由与 slot 注册）、`test/restart-judge.mjs`（重启判定纯函数）、`test/selftest-launch.ps1`（真机试听）。
+- 文档：补充依赖安装步骤与缺依赖时的症状/自检命令（README 安装第 2 步）。

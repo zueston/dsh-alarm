@@ -27,9 +27,11 @@ DSH 独立提醒报警插件：root 会话需要你裁决、需要你确认计�
 | Node.js | ≥ 24 |
 | PowerShell | **Windows PowerShell 5.1**（`powershell.exe`，不是 `pwsh` 7：WinRT toast 在 .NET Core PowerShell 里没有投影） |
 | 系统组件 | Windows 自带的 SAPI 语音（`System.Speech`）与 `%SystemRoot%\Media\*.wav` 系统铃声 |
-| 依赖 | `@deepseek-ai/schemastery`（设置 schema） |
+| 依赖 | 唯一的第三方依赖 `@deepseek-ai/schemastery@3.18.4`（设置 schema；已在 `dependencies` 里声明，但**必须自己装到插件目录内**，见[安装](#安装)第 2 步） |
 
 ## 安装
+
+> ⚠️ **最容易踩的坑：漏装依赖。** 本插件的新手包里**不含** `node_modules`，而且**不能**借用 `%USERPROFILE%\.dsh\plugin-src\node_modules` 里那份（见第 2 步）。没装依赖时的现象：**插件列表里看不到 dsh-alarm、侧边栏没有铃铛入口**；已经挂载过的话，`/api/dsh-alarm/health` 会返回 **401**（像鉴权问题，其实是插件没加载起来、这条路由根本不存在）。所以下面第 2 步别跳。
 
 1. 把本仓库放到 DSH 的插件源码目录（目录名随意，习惯用插件名）：
 
@@ -37,14 +39,24 @@ DSH 独立提醒报警插件：root 会话需要你裁决、需要你确认计�
    %USERPROFILE%\.dsh\plugin-src\dsh-alarm\
    ```
 
-   然后在插件目录里装依赖：
+2. **在插件目录内装依赖**（挂载之前做）：
 
    ```powershell
    cd "$env:USERPROFILE\.dsh\plugin-src\dsh-alarm"
    npm install
    ```
 
-2. 在你的 **profile 的 `cordis.patch.yml`** 里挂载本插件。示意片段（**键名与层级以你该文件里现有条目为准**，下面是形状示例，不是可直接粘贴的成品）：
+   - 用 pnpm 也行：`pnpm install`（或只补这一个包 `pnpm add @deepseek-ai/schemastery`）；npm 下只想装依赖、不碰其它：`npm install @deepseek-ai/schemastery@3.18.4`。
+   - **为什么不靠 `plugin-src\node_modules` 里被提升（hoisted）的副本**：那是所有插件共用的一层，任何其它插件的安装、升级或清理都可能把它动掉甚至清空——本插件就这么炸过一次（`Cannot find package '@deepseek-ai/schemastery'`，宿主里表现为「插件没装上」）。装在自己目录里才跟本仓库的 `package.json` 绑死。
+   - 装完**自检**（在插件目录执行）：
+
+     ```powershell
+     node -e "import('./index.js').then(m=>console.log('OK',Object.keys(m).join(',')))"
+     ```
+
+     输出 `OK Config,apply,inject,name` 才算依赖齐了；报 `Cannot find package '@deepseek-ai/schemastery'` 就是没装到插件目录里，回到本条命令重装。
+
+3. 在你的 **profile 的 `cordis.patch.yml`** 里挂载本插件。示意片段（**键名与层级以你该文件里现有条目为准**，下面是形状示例，不是可直接粘贴的成品）：
 
    ```yaml
    plugins:
@@ -59,7 +71,7 @@ DSH 独立提醒报警插件：root 会话需要你裁决、需要你确认计�
 
    > `id` 必须是 `dsh-alarm`：设置页的写回按 loader 行 id 查找条目（不是按 `name`）。
 
-3. 重启 DSH。侧边栏出现铃铛入口「报警提醒」，设置页出现「报警提醒（dsh-alarm）」卡片。
+4. 重启 DSH。侧边栏出现铃铛入口「报警提醒」，设置页出现「报警提醒（dsh-alarm）」卡片。（没出现 = 回到第 2 步自检依赖。）
 
 ## 使用
 
