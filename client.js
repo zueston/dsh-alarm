@@ -32,6 +32,13 @@
  * **配置走模块级缓存**（`configCache` / `refreshConfig()` / `useConfigCache()`）：
  * `apply()` 里预加载一次，卡片挂载时先吃缓存、缓存没就绪才发请求；保存成功后回写缓存。
  * 目的只有一个：点开弹窗立刻看到完整表单（原先每次挂载都 GET 一次，必然闪「正在载入」）。
+ *
+ * **缓存是旧结构时自愈**（`missingFieldKeys()` / 强制 `refreshConfig(true)` / `mergeValues()`）：
+ * 插件热升级会加字段（1.3.0 一次从 63 键变 69 键），而页面上的 `values` 还是升级前的快照 →
+ * 新字段读 undefined 渲染成「不勾」、点保存时宿主 `coerceValues()` 因为缺键整体返回 null
+ * （用户实测的 `保存失败：invalid values payload`）。卡片因此自己检测缺键、强制重拉一次，
+ * 按「新快照为底 + 本地改动叠加」合并；保存碰到同一个 400 也走同一条重载路径。
+ * 别把这段当冗余删掉——它修的就是那个报错。
  * 条件表/字段行都加了 `React.memo` + 比较器：勾一个复选框只重渲染那一行，
  * 不再整棵树重建（原先勾选明显卡顿）。两处都别改回「每次全量」。
  */
@@ -153,9 +160,13 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 拉一次配置写进缓存并返回最新缓存；**已经在飞就复用同一个 Promise**（不重复发请求）。
+		 *  `force === true` 时**绕过「缓存已就绪就不拉」的短路**强制重发：插件热升级后
+		 *  缓存里躺着的正是那份旧结构的快照（status 恰好是 ok，但那份数据不能用），
+		 *  自愈与「重新载入」都必须真读一次磁盘配置。in-flight 仍然复用。
 		 *  失败不抛错（`apiRequest` 自己把网络异常收成 `ok:false`），只把缓存置 error，
 		 *  由调用方决定是「显示错误」还是「下次再试」。 */
-		async function refreshConfig() {
+		async function refreshConfig(force) {
+			if (force !== true && configCache.status === 'ok') return configCache;
 			if (configInFlight !== null) return configInFlight;
 			setConfigCache({ status: 'loading' });
 			configInFlight = (async () => {
@@ -444,6 +455,95 @@ window.__ModuleLoader__.load({
 				],
 			},
 		];
+
+		// ------------------------------------------------------------------
+		// 配置结构自愈（页面快照比服务端旧时的检测 + 合并）
+		// ------------------------------------------------------------------
+
+		/** 把 SECTIONS 摊平成「键 → 字段类型」（bool / number / select / text），顺序稳定。
+		 *
+		 *  **为什么从 SECTIONS 反推而不是手写键表**：宿主 `coerceValues()` 遍历的是服务端
+		 *  `FIELDS` 的每一个键，缺一个就整体返回 null → `400 invalid values payload`。
+		 *  客户端要知道「页面上这份 values 够不够 69 个键」，唯一的真源就是渲染用的同一份
+		 *  SECTIONS（条件表每行 4 个 bool + 4 个通道总开关 + 各分区 fields）。
+		 *  手写第二份键表必然与 SECTIONS 走偏，下次加字段又要改两处。 */
+		function fieldSpecOf(sections) {
+			const spec = new Map();
+			for (const section of sections) {
+				for (const column of CONDITION_COLUMNS) spec.set(column.toggleKey, 'bool');
+				for (const row of section.rows ?? []) {
+					for (const column of CONDITION_COLUMNS) spec.set(row[column.id], 'bool');
+				}
+				for (const field of section.fields ?? []) spec.set(field.key, field.type);
+			}
+			return spec;
+		}
+
+		/** 键表缓存：按 SECTIONS 的**数组引用**缓存（WeakMap，不拦 GC）。
+		 *  `missingFieldKeys()` 每次改一项都会被调用一次，别在里面重复摊平。 */
+		const fieldKeyCache = new WeakMap();
+
+		function fieldKeysOf(sections) {
+			const cached = fieldKeyCache.get(sections);
+			if (cached !== undefined) return cached;
+			const keys = [...fieldSpecOf(sections).keys()];
+			fieldKeyCache.set(sections, keys);
+			return keys;
+		}
+
+		/** 缺失字段键：`values` 里没有（或值为 undefined / null）的键，按 SECTIONS 的顺序返回。
+		 *
+		 *  **纯函数**（不读模块状态、不碰网络）：`missingFieldKeys({}, …)` 就是整张键表本身。
+		 *  `undefined` / `null` 也算缺失——JSON.stringify 会把 undefined 的键整个丢掉、
+		 *  null 也过不了 `normalize()`，两种在服务端眼里都是「缺键」，照样 400。
+		 *  `sections` 缺省取 SECTIONS：离线自测脚本直接 `missingFieldKeys(stale)` 就能验。 */
+		function missingFieldKeys(values, sections = SECTIONS) {
+			if (values === null || values === undefined || typeof values !== 'object') return [];
+			const missing = [];
+			for (const key of fieldKeysOf(sections)) {
+				const value = values[key];
+				if (value === undefined || value === null) missing.push(key);
+			}
+			return missing;
+		}
+
+		/** 合并时判断「本地这一项能不能盖到新快照上」：类型对得上才算合法。
+		 *  bool 要布尔、number 要有限数字、字符串类要字符串（下拉还要求非空）。
+		 *  类型不对就当没有——宁可回到服务端的新值，也不要把页面里的半成品发回去
+		 *  让 `coerceValues()` 再整体 400 一次。 */
+		function isUsableValue(kind, value) {
+			if (kind === 'bool') return typeof value === 'boolean';
+			if (kind === 'number') return typeof value === 'number' && Number.isFinite(value);
+			if (kind === 'select') return typeof value === 'string' && value !== '';
+			if (kind === 'text') return typeof value === 'string';
+			return false;
+		}
+
+		/** 把本地改动叠到新快照上：**新快照为底**，只覆盖「键存在且值合法」的项。
+		 *  自愈的目的是补上缺的键，绝不能顺手把用户刚勾的东西清掉（那是另一类事故）。 */
+		function mergeValues(snapshot, local, sections) {
+			const base = snapshot !== null && typeof snapshot === 'object' ? snapshot : {};
+			const merged = { ...base };
+			if (local === null || local === undefined || typeof local !== 'object') return merged;
+			for (const [key, kind] of fieldSpecOf(sections)) {
+				if (!Object.prototype.hasOwnProperty.call(local, key)) continue;
+				if (!isUsableValue(kind, local[key])) continue;
+				merged[key] = local[key];
+			}
+			return merged;
+		}
+
+		/** 「页面快照比服务端旧」的固定提示：保存 400 与自愈两处共用同一句口径。 */
+		const STALE_SCHEMA_TEXT = '配置结构已更新（插件刚升级），已重新载入最新设置，请确认后再保存一次。';
+
+		/** 服务端「结构不符」的判据：**400 + 固定文案**（host/routes.js 的 `coerceValues()`
+		 *  遇到缺键/非法值就整体返回 null，然后 400 `invalid values payload`）。
+		 *  只认这两条，别的 400（例如将来新增的校验）仍按普通失败显示，不假装是升级。 */
+		function isStaleSchemaError(result) {
+			if (result?.ok !== false) return false;
+			if (result.status !== 400) return false;
+			return String(result.value?.error ?? '').includes('invalid values payload');
+		}
 
 		// ------------------------------------------------------------------
 		// 样式（全部走 DSH 的 CSS 变量，取不到时回落中性色）
@@ -953,6 +1053,10 @@ window.__ModuleLoader__.load({
 			 *  `latestValues.current === null` 直接返回，勾了没反应。 */
 			const latestValues = useRef(warm ? configCache.values : null);
 			const latestExpected = useRef(warm ? configCache.expected ?? configCache.values : null);
+			/** 结构自愈的去重守卫：记「已针对哪一组缺失键试过自愈」。
+			 *  同一条缺失签名只重拉一次——否则一次失败就会在每次重渲染时再发一次 GET
+			 *  （服务端真返回不了那些键时）变成死循环。缺键集合变了（下次升级）才算新一次。 */
+			const healedFor = useRef('');
 
 			/** 清掉还没触发的自动保存。 */
 			const cancelAutoSave = useCallback(() => {
@@ -975,18 +1079,22 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			/** 从宿主重新读一次配置写进缓存，再把结果铺到页面状态上。
-			 *  「重新载入」按钮与「缓存没就绪时的首次加载」共用这一条路径。 */
+			 *  「重新载入」按钮、缓存没就绪时的首次加载、以及「保存撞上旧结构」时的自动重载
+			 *  共用这一条路径。**必须强制重发**（`refreshConfig(true)`）：
+			 *  「重新载入」的语义就是「丢弃页面改动、重新读磁盘配置」，命中缓存等于没读。
+			 *  返回是否真的读成功（调用方要据此决定提示哪一句）。 */
 			const load = useCallback(async () => {
 				cancelAutoSave();
-				const next = await refreshConfig();
+				const next = await refreshConfig(true);
 				if (next.status !== 'ok') {
 					setError(`读取配置失败：${next.error ?? '未知错误'}`);
-					return;
+					return false;
 				}
 				applyValues(next.values ?? null);
 				applyExpected(next.expected ?? next.values ?? null);
 				setOptions(next.options ?? EMPTY_OPTIONS);
 				setError(null);
+				return true;
 			}, [applyExpected, applyValues, cancelAutoSave]);
 
 			/** **只在缓存没就绪时**才拉：热缓存下这里什么都不做，弹窗首帧就是完整表单。
@@ -1007,6 +1115,51 @@ window.__ModuleLoader__.load({
 				setOptions(cache.options ?? EMPTY_OPTIONS);
 				setError(null);
 			}, [cache, applyExpected, applyValues]);
+
+			/** **结构自愈**：页面上的 `values` 缺键（缓存是插件升级**前**的快照）时，
+			 *  强制重拉一次配置，把缺的键补齐，同时保留用户已经改过的项。
+			 *
+			 *  **这条路径修的是用户实测的 `保存失败：invalid values payload`**：
+			 *  `configCache` 是模块级缓存、`apply()` 时预加载一次；插件热升级后 bundle 换了、
+			 *  页面没刷新，`values` 仍是旧结构的快照（63 键对 69 键）→ 新加的两行读
+			 *  undefined 渲染成「全不勾」，点保存时 63 键发上去、宿主 `coerceValues()`
+			 *  遍历服务端的 69 个键、遇到缺键整体返回 null → 400。补齐之后新字段立刻
+			 *  按服务端默认值显示（默认 true 的会变成勾选），保存也就能过了。
+			 *
+			 *  **合并规则**：新快照为底 + 本地「键存在且值合法」的项盖上去
+			 *  （`mergeValues()`），用户刚勾的东西不能因为一次自愈被清掉。
+			 *  **只自愈一次**：同一组缺失键由 `healedFor` 去重（见上面的说明）。 */
+			useEffect(() => {
+				if (values === null || values === undefined) return;
+				const missing = missingFieldKeys(values, SECTIONS);
+				if (missing.length === 0) {
+					healedFor.current = '';
+					return;
+				}
+				const signature = missing.join(',');
+				if (healedFor.current === signature) return;
+				healedFor.current = signature;
+				void (async () => {
+					// 强制：缓存此刻刚好是 ok（旧结构），不绕过短路的话根本不会重发。
+					const next = await refreshConfig(true);
+					// 读不到就保持现状：保存那条 400 分支会再走一遍同样的重载路径。
+					if (next.status !== 'ok') return;
+					const snapshot = next.values ?? {};
+					const merged = mergeValues(snapshot, latestValues.current, SECTIONS);
+					applyValues(merged);
+					applyExpected(next.expected ?? snapshot);
+					setOptions(next.options ?? EMPTY_OPTIONS);
+					setError(null);
+					// 服务端也给不出那些键（不是「页面旧」而是「宿主旧/坏了」）时不许报成功——
+					// 说「已重新载入最新设置」会让人以为可以保存了，其实还是会 400。
+					const stillMissing = missingFieldKeys(merged, SECTIONS);
+					setStatus(
+						stillMissing.length === 0
+							? { kind: 'ok', text: '配置结构已更新（插件刚升级），已重新载入最新设置。' }
+							: { kind: 'bad', text: `配置结构仍不完整（缺 ${stillMissing.length} 项），已重新载入最新设置。` },
+					);
+				})();
+			}, [values, applyExpected, applyValues]);
 
 			/** 卸载时清掉未触发的定时器（别让组件已经没了还去 POST）。 */
 			useEffect(
@@ -1063,12 +1216,24 @@ window.__ModuleLoader__.load({
 								? '配置已被其它窗口修改，已重新载入。'
 								: '配置已被其它窗口修改，已重新载入，请再保存一次。',
 						});
+					} else if (isStaleSchemaError(result)) {
+						// 页面快照比服务端旧（插件刚升级、字段变多了）：这既不是用户的错，
+						// 也不是网络错，说「保存失败：invalid values payload」只会让人以为配置坏了。
+						// 自动重新读一次磁盘配置（丢掉这份缺键的旧快照），再让用户确认。
+						// 自动保存走同一条路径，只是提示不染成红色——用户这时没点任何按钮。
+						const reloaded = await load();
+						setStatus({
+							kind: auto ? 'ok' : 'bad',
+							text: reloaded
+								? STALE_SCHEMA_TEXT
+								: '配置结构已更新（插件刚升级），但重新载入失败，请点「重新载入」后再保存。',
+						});
 					} else {
 						setStatus({ kind: 'bad', text: `保存失败：${result.value?.error ?? result.status}` });
 					}
 					if (!auto) setBusy('');
 				},
-				[applyExpected, applyValues],
+				[applyExpected, applyValues, load],
 			);
 
 			/** 勾选即存：400ms 防抖，连续勾选只发一次 POST。 */
@@ -1783,6 +1948,11 @@ window.__ModuleLoader__.load({
 
 		return {
 			inject: ['slots'],
+			/** 纯函数导出：现场排查与离线自测脚本直接用它验「这份快照够不够键」。
+			 *  `missingFieldKeys({}, …)` 返回整张键表本身（离线脚本拿它与宿主
+			 *  `host/routes.js` 的 FIELDS 键表对账），`missingFieldKeys(stale)` 返回缺的那几个。
+			 *  宿主 loader 只读 `inject` / `apply`，多挂一个纯函数不影响装载。 */
+			missingFieldKeys,
 			apply(ctx) {
 				// **预加载配置**：插件一装上就把配置
 				// 拉进模块级缓存，等用户点侧栏「报警提醒」时数据已经在内存里——弹窗瞬开，
