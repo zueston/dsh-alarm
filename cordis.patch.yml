@@ -1,0 +1,10 @@
+# dsh-alarm bundle patch：把插件行插入 web profile 的清单（roster）。
+# 作为 profile bundle 层（package.json 的 dsh.bundle.patch 字段）在 dsh-base 之上应用。
+#
+# 为什么走 bundle 而不是只手写 profile 的 cordis.patch.yml：
+# profile 的插件清单（设置 → 插件列表、依赖对账）来自 profile manifest 里的
+# `dependencies` + `dsh.profile.bundles`。只存在于用户 patch 层的一行，会加载 node 半体，
+# 但包对 profile 清单"不存在"，于是浏览器半体永远不会激活、设置 → 插件里也看不到它。
+- insert:
+    - id: dsh-alarm
+      name: 'dsh-alarm'

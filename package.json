@@ -7,11 +7,13 @@
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "client.js",
+    "cordis.patch.yml",
     "lib",
     "host",
     "README.md",
@@ -42,6 +44,9 @@
   },
   "dsh": {
     "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
