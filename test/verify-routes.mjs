@@ -871,55 +871,80 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   // 渲染用的快照：三个入口全开，才拿得到卡片本体。
   const viewSnapshot = { ...snapshot, showInMain: true, showInPlugins: true, showInSettings: true };
   const viewOptions = { wavs: ['Alarm03.wav', 'notify.wav'], voices: ['Microsoft Huihui Desktop'] };
+  // 渲染哪份配置由这个变量决定：同一份源码要装两次（默认模式一次 / 严格模式一次）。
+  let snapshotForView = viewSnapshot;
   const fetchStub = async (url, init) => {
     if ((init?.method ?? 'GET') === 'POST') {
       const payload = JSON.parse(String(init?.body ?? '{}'));
-      return { ok: true, status: 200, json: async () => ({ values: payload.values, expected: payload.values, defaults: viewSnapshot, options: viewOptions }) };
+      return { ok: true, status: 200, json: async () => ({ values: payload.values, expected: payload.values, defaults: snapshotForView, options: viewOptions }) };
     }
     return {
       ok: true,
       status: 200,
-      json: async () => ({ values: viewSnapshot, expected: viewSnapshot, defaults: viewSnapshot, options: viewOptions }),
+      json: async () => ({ values: snapshotForView, expected: snapshotForView, defaults: snapshotForView, options: viewOptions }),
     };
   };
-  let viewFactory = null;
   // 同一份源码既拿去求值渲染，也拿去抽 `STRICT_MODE_TIP`（下面要比对 title 是否逐字等于它）。
   const viewSource = readFileSync(`${SRC}/client.js`, 'utf8');
-  new Function('window', 'fetch', 'Headers', viewSource)(
-    {
-      __ModuleLoader__: {
-        load(entry) {
-          viewFactory = entry.factory;
+
+  /** 装一次 client.js（模块级状态全新）→ 渲染设置卡片。
+   *  `cssSink` 是数组时给一个假的 `document`，把 `ensureStyle()` 注入的那条 `<style>` 收进来
+   *  （分段控件的网格/平移规则只能从真注入的 CSS 文本里验）；传 null 走 SSR 路径（没有 document）。 */
+  async function mountCard(snap, cssSink) {
+    snapshotForView = snap;
+    let factory = null;
+    const doc = cssSink === null ? undefined : {
+      getElementById: () => null,
+      createElement: () => ({ id: '', textContent: '' }),
+      head: {
+        appendChild(node) {
+          if (node?.id === 'dsh-alarm-style') cssSink.push(node);
         },
       },
-    },
-    fetchStub,
-    class Headers {
-      constructor(init) {
-        this.init = init;
-      }
-    },
-  );
-  assert.ok(viewFactory !== null, 'client.js 没有调用 __ModuleLoader__.load（渲染段）');
-  const viewMod = viewFactory(() => MiniReact);
-  const viewRegistered = [];
-  viewMod.apply({
-    slots: {
-      inject(name, register) {
-        register();
+    };
+    new Function('window', 'fetch', 'Headers', 'document', viewSource)(
+      {
+        __ModuleLoader__: {
+          load(entry) {
+            factory = entry.factory;
+          },
+        },
       },
-      register(spec, component) {
-        viewRegistered.push({ spec, component });
-        return () => {};
+      fetchStub,
+      class Headers {
+        constructor(init) {
+          this.init = init;
+        }
       },
-    },
-  });
-  // apply() 里 `void refreshConfig()`：等预加载落进模块级缓存，卡片首帧才是完整表单。
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const cardSlot = viewRegistered.find((entry) => entry.spec.name === 'plugins.bundle.config');
-  assert.ok(cardSlot, '没有 plugins.bundle.config 注册（渲染段拿不到卡片）');
-  const card = renderTree(MiniReact.createElement(cardSlot.component, {}));
-  assert.ok(card !== null, '设置卡片渲染成了 null（三个入口都是开着的）');
+      doc,
+    );
+    assert.ok(factory !== null, 'client.js 没有调用 __ModuleLoader__.load（渲染段）');
+    const mod = factory(() => MiniReact);
+    const registered = [];
+    mod.apply({
+      slots: {
+        inject(name, register) {
+          register();
+        },
+        register(spec, component) {
+          registered.push({ spec, component });
+          return () => {};
+        },
+      },
+    });
+    // apply() 里 `void refreshConfig()`：等预加载落进模块级缓存，卡片首帧才是完整表单。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const slot = registered.find((entry) => entry.spec.name === 'plugins.bundle.config');
+    assert.ok(slot, '没有 plugins.bundle.config 注册（渲染段拿不到卡片）');
+    const tree = renderTree(MiniReact.createElement(slot.component, {}));
+    assert.ok(tree !== null, '设置卡片渲染成了 null（三个入口都是开着的）');
+    return { mod, card: tree };
+  }
+
+  const viewCss = [];
+  const firstMount = await mountCard(viewSnapshot, viewCss);
+  const viewMod = firstMount.mod;
+  const card = firstMount.card;
 
   // ---- 条件表：10 行 × (4 开关 + 1 播报文本) ----
   const conditionRows = findAll(card, (item) => item.props.className === 'ala-trow');
@@ -965,6 +990,62 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
     '分段控件应是 默认模式(tag-first) / 严格模式(tag-only) 两项',
   );
   assert.strictEqual(segmentOptions[0].props['data-selected'], 'true', '默认模式应初始选中');
+
+  // ---- 分段滑块：等宽网格 + 纯 CSS 平移（选中态只驱动容器 data-index，不做尺寸测量）----
+  // 首次渲染时渲染器的 offsetWidth 一律是 0（模拟「布局尚未稳定」）：滑块样式仍必须正确，
+  // 因为位置/宽度全在 CSS 里，组件只写一个 data-index。
+  const segThumb = findBy(segment, (item) => item.props.className === 'ala-seg-thumb');
+  assert.ok(segThumb !== null, '分段控件缺滑块（.ala-seg-thumb）');
+  assert.strictEqual(segment.props['data-index'], '0', '选中第 1 项（默认模式）时容器 data-index 应是 "0"');
+  // 渲染树里不该有任何带行内 width / transform 的滑块节点——那就是「靠 JS 量」的回潮。
+  const segNodes = [segment, ...findAll(segment, () => true)];
+  for (const node of segNodes) {
+    const style = node.props?.style ?? {};
+    assert.strictEqual(style.width, undefined, `${node.props.className} 不该带行内 width（滑块宽度交给 CSS）`);
+    assert.strictEqual(style.transform, undefined, `${node.props.className} 不该带行内 transform（滑块位移交给 CSS）`);
+  }
+
+  // 注入的 CSS 文本：两列等宽 grid + 由 data-index 驱动的平移，缺一条都会回到「首帧错位」。
+  assert.strictEqual(viewCss.length, 1, `ensureStyle() 应恰好注入 1 条 <style>，实际 ${viewCss.length}`);
+  const segCss = String(viewCss[0].textContent ?? '');
+  assert.ok(segCss.includes('grid-auto-flow: column'), '注入的 CSS 里 .ala-seg 应是列方向网格（grid-auto-flow: column）');
+  assert.ok(/\.ala-seg \{[^}]*grid-auto-columns: 1fr;/u.test(segCss), '注入的 CSS 里 .ala-seg 应声明 grid-auto-columns: 1fr（两列等宽）');
+  assert.ok(/\.ala-seg-thumb \{[^}]*width: calc\(50% - 2px\);/u.test(segCss), '注入的 CSS 里滑块宽度应是 calc(50% - 2px)（正好一列）');
+  assert.ok(segCss.includes('.ala-seg[data-index="1"] .ala-seg-thumb'), '注入的 CSS 缺 .ala-seg[data-index="1"] .ala-seg-thumb 规则');
+  assert.ok(segCss.includes('translateX(100%)'), '注入的 CSS 缺 data-index 平移（translateX(100%)）');
+  assert.strictEqual(segCss.includes('data-fallback'), false, '注入的 CSS 里不该再有测量退化分支（data-fallback）');
+
+  // 组件体内 0 命中测量 API：这条断言钉住「删掉测量」本身，不是只钉住渲染产物。
+  const segmentStart = viewSource.indexOf('function ProtocolSegmented(props) {');
+  assert.ok(segmentStart >= 0, 'client.js 里找不到 ProtocolSegmented()');
+  let segmentEnd = segmentStart;
+  let braceDepth = 0;
+  for (let cursor = viewSource.indexOf('{', segmentStart); cursor < viewSource.length; cursor += 1) {
+    if (viewSource[cursor] === '{') braceDepth += 1;
+    else if (viewSource[cursor] === '}') {
+      braceDepth -= 1;
+      if (braceDepth === 0) {
+        segmentEnd = cursor + 1;
+        break;
+      }
+    }
+  }
+  assert.ok(segmentEnd > segmentStart, 'ProtocolSegmented() 的花括号没闭合（切片失败）');
+  const segmentBody = viewSource.slice(segmentStart, segmentEnd);
+  for (const banned of ['offsetWidth', 'offsetLeft', 'useLayoutEffect', 'usePrePaintEffect', 'useRef', 'data-fallback']) {
+    assert.strictEqual(segmentBody.includes(banned), false, `ProtocolSegmented() 里不该再用 ${banned}（CSS 已接管滑块位置）`);
+  }
+  assert.strictEqual(viewSource.includes('usePrePaintEffect'), false, 'client.js 里不该再留 usePrePaintEffect 常量');
+
+  // 选中第 2 项时容器 data-index 应是 "1"：再装一次模块，用 tag-only 的配置渲染同一张卡片。
+  const strictMount = await mountCard({ ...viewSnapshot, protocolMode: 'tag-only' }, []);
+  const strictSegment = findBy(strictMount.card, (item) => item.props.className === 'ala-seg');
+  assert.ok(strictSegment !== null, '严格模式下没有渲染分段控件（.ala-seg）');
+  assert.strictEqual(strictSegment.props['data-index'], '1', '选中第 2 项（严格模式）时容器 data-index 应是 "1"');
+  const strictOptions = findAll(strictSegment, (item) => item.props.className === 'ala-seg-opt');
+  assert.strictEqual(strictOptions[1].props['data-selected'], 'true', '严格模式下第 2 项应选中');
+  const strictThumb = findBy(strictSegment, (item) => item.props.className === 'ala-seg-thumb');
+  assert.strictEqual(strictThumb.props.style, undefined, '严格模式下滑块也不该带行内 style（位置由 data-index + CSS 决定）');
 
   // ---- 严格模式说明：15×15 的 `?` 徽标 + **自绘说明卡片**（不再用原生 title）----
   // `STRICT_MODE_TIP` 是 client.js 里的模块内常量，这里从源码把它求值出来做逐字比对，

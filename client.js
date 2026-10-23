@@ -786,24 +786,29 @@ window.__ModuleLoader__.load({
 .ala-unit { font-size: 12px; color: var(--a-sub); }
 .ala-file-input { display: none; }
 
-/* ---- 分段控件（协议模式）---- */
-.ala-seg { position: relative; display: inline-flex; align-items: center; padding: 2px; border-radius: 999px; background: var(--a-fill-2); }
+/* ---- 分段控件（协议模式）----
+ * 等宽网格 + 纯 CSS 平移，不依赖首帧布局测量：两列严格等宽，滑块宽度恒为 calc(50% - 2px)
+ * （正好等于一列宽），左右位置只由容器上的 data-index 决定。换行 / 字体没加载完都不影响。 */
+.ala-seg {
+  position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  align-items: center; padding: 2px; border-radius: 999px; background: var(--a-fill-2);
+}
 .ala-seg-thumb {
-  position: absolute; top: 2px; left: 2px; height: calc(100% - 4px);
+  position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: calc(100% - 4px);
   border-radius: 999px; background: var(--a-brand);
   box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
-  transition: transform .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1);
+  transition: transform .22s cubic-bezier(.4, 0, .2, 1);
 }
+.ala-seg[data-index="0"] .ala-seg-thumb { transform: translateX(0); }
+.ala-seg[data-index="1"] .ala-seg-thumb { transform: translateX(100%); }
 .ala-seg-opt {
-  position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px;
+  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 6px 14px; border-radius: 999px; white-space: nowrap;
   font-size: 12px; font-weight: 600; line-height: 1; color: var(--a-sub);
   cursor: pointer; transition: color .18s, background-color .18s;
 }
 .ala-seg-opt[data-selected="true"] { color: #fff; }
 .ala-seg-opt[data-selected="false"]:hover { color: var(--a-brand); }
-/* 量不到宽度时的退化形态：选中项自己上底色（仍带过渡），滑块不渲染。 */
-.ala-seg-opt[data-selected="true"][data-fallback="true"] { background: var(--a-brand); color: #fff; }
 .ala-seg-opt:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
 
 /* ---- 说明徽标（问号）：徽标本身走 CSS，包裹层与弹出的说明卡片走行内 style（见 TIP_WRAP_STYLE / TIP_PANEL_STYLE） ---- */
@@ -927,9 +932,6 @@ window.__ModuleLoader__.load({
 			style.textContent = ALARM_CSS;
 			document.head.appendChild(style);
 		}
-
-		/** `useLayoutEffect` 的兜底：分段滑块要在**绘制前**量好宽度，否则首帧会闪一下等宽形态。 */
-		const usePrePaintEffect = typeof React.useLayoutEffect === 'function' ? React.useLayoutEffect : React.useEffect;
 
 		// ------------------------------------------------------------------
 		// 小组件
@@ -1290,11 +1292,10 @@ window.__ModuleLoader__.load({
 
 		/** 协议模式的分段控件（灰底胶囊 + 品牌蓝滑块，选中项白字）。
 		 *
-		 *  **滑块位置靠真测量**：选中项 `offsetLeft` / `offsetWidth` → 写 `width` + `transform`，
-		 *  配合 CSS 的 `.22s` 过渡滑动。测量放在 `useLayoutEffect` 里（绘制前），
-		 *  所以首帧不会闪一下等宽形态。
-		 *  **量不到就退化**（无布局的离线渲染、`offsetWidth` 拿不到）：`thumb` 置 null →
-		 *  选中项自己上品牌蓝底色（`data-fallback` + CSS，仍带过渡）。两条路都有过渡，别删。
+		 *  **等宽网格 + 纯 CSS 平移，不依赖首帧布局测量**：容器是两列等宽 grid，滑块宽度恒为
+		 *  `calc(50% - 2px)`（正好一列宽），位置只由容器上的 `data-index`（选中项下标）决定。
+		 *  早先靠 `offsetLeft` / `offsetWidth` 量完再写 `width` + `transform`，浮层首次挂载时子元素
+		 *  还没完成布局，量到的是 0 或半成品尺寸 → 首帧滑块错位、比选项窄；改成 CSS 后没有这条时序依赖。
 		 *  点击 `?` 不算选项点击（徽标自己 `stopPropagation`）。 */
 		function ProtocolSegmented(props) {
 			const { field, value, onChange } = props;
@@ -1302,37 +1303,9 @@ window.__ModuleLoader__.load({
 			const raw = value === undefined || value === null ? '' : String(value);
 			const known = list.some((option) => option.value === raw);
 			const current = known ? raw : (field.fallback ?? (list.length > 0 ? list[0].value : ''));
-			const [thumb, setThumb] = React.useState(null);
-			const optionRefs = React.useRef([]);
+			const currentIndex = Math.max(0, list.findIndex((option) => option.value === current));
 
-			const measure = React.useCallback(() => {
-				const index = list.findIndex((option) => option.value === current);
-				const node = index >= 0 ? optionRefs.current[index] : null;
-				const width = node?.offsetWidth;
-				const left = node?.offsetLeft;
-				if (!Number.isFinite(width) || !Number.isFinite(left) || width <= 0) {
-					setThumb(null);
-					return;
-				}
-				// 减 2px：胶囊内边距是 2px，滑块自己也是从 top/left 2px 起算的。
-				setThumb({ width: `${width}px`, transform: `translateX(${left - 2}px)` });
-			}, [current, list]);
-
-			usePrePaintEffect(() => {
-				measure();
-			}, [measure]);
-
-			React.useEffect(() => {
-				if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
-				const onResize = () => measure();
-				window.addEventListener('resize', onResize);
-				return () => window.removeEventListener('resize', onResize);
-			}, [measure]);
-
-			const nodes = [];
-			if (thumb !== null) {
-				nodes.push(h('span', { key: 'thumb', className: 'ala-seg-thumb', style: thumb, 'aria-hidden': true }));
-			}
+			const nodes = [h('span', { key: 'thumb', className: 'ala-seg-thumb', 'aria-hidden': true })];
 			for (let index = 0; index < list.length; index += 1) {
 				const option = list[index];
 				const selected = option.value === current;
@@ -1345,12 +1318,8 @@ window.__ModuleLoader__.load({
 							role: 'radio',
 							'aria-checked': selected,
 							'data-selected': selected ? 'true' : 'false',
-							'data-fallback': thumb === null ? 'true' : 'false',
 							'data-value': option.value,
 							tabIndex: selected ? 0 : -1,
-							ref: (node) => {
-								optionRefs.current[index] = node;
-							},
 							onClick: () => {
 								if (option.value !== current) onChange(field.key, option.value);
 							},
@@ -1365,7 +1334,11 @@ window.__ModuleLoader__.load({
 					),
 				);
 			}
-			return h('div', { className: 'ala-seg', role: 'radiogroup', 'aria-label': field.label }, nodes);
+			return h(
+				'div',
+				{ className: 'ala-seg', role: 'radiogroup', 'aria-label': field.label, 'data-index': String(currentIndex) },
+				nodes,
+			);
 		}
 
 		/** 「自定义铃声」在铃声下拉里的哨兵值（不是真实文件名）。 */
