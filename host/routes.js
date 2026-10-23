@@ -2,7 +2,7 @@
  *
  * 浏览器半体跑在受限的动态模块运行时里：没有 configForms / remote 服务、也没有
  * 直接网络，唯一合法的桥是**同源 fetch** 打宿主注册在 ctx.webServer 上的路由
- * （与 dsh-switchman / skill-explorer 用的同一套模式）。
+ * （要点：字段类型与默认值集中在一张 FIELDS 表，读写都走它，两端只交换同源 HTTP 的 JSON）。
  *
  *   GET  /api/dsh-alarm/config  — { values, expected, defaults, options: { wavs, voices } }
  *                                 （defaults = 所有字段的 FIELDS 默认值，供「恢复默认」整体替换）

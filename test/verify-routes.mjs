@@ -725,6 +725,8 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
 //   - 条件表 10 行；表头**两行**（第一行四个通道总开关，第二行六个文字标签）；
 //   - 每行恰好 4 个开关 + 1 个播报文本输入；
 //   - 协议模式是分段控件（2 个选项，值仍是 tag-first / tag-only）；
+//   - 「严格模式」后面是 15×15 的 `?` 徽标，说明正文**只走原生 title**（逐字等于 `STRICT_MODE_TIP`）：
+//     整棵树里没有 `role="tooltip"` 节点、源码里没有 tip-bubble / 气泡那套残留；
 //   - **TTS 分区里不再有逐条件播报文本字段**（那 10 个 `voiceText*` 已经上移到条件表最后一列）。
 {
   /** 组件渲染帧：hooks 按调用顺序编号（迷你版，够单次静态渲染用）。 */
@@ -880,7 +882,9 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
     };
   };
   let viewFactory = null;
-  new Function('window', 'fetch', 'Headers', readFileSync(`${SRC}/client.js`, 'utf8'))(
+  // 同一份源码既拿去求值渲染，也拿去抽 `STRICT_MODE_TIP`（下面要比对 title 是否逐字等于它）。
+  const viewSource = readFileSync(`${SRC}/client.js`, 'utf8');
+  new Function('window', 'fetch', 'Headers', viewSource)(
     {
       __ModuleLoader__: {
         load(entry) {
@@ -961,6 +965,47 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   );
   assert.strictEqual(segmentOptions[0].props['data-selected'], 'true', '默认模式应初始选中');
 
+  // ---- 严格模式说明：15×15 的 `?` 徽标 + **原生 title**（不再自绘气泡）----
+  // `STRICT_MODE_TIP` 是 client.js 里的模块内常量，这里从源码把它求值出来做逐字比对，
+  // 免得测试里再抄一份文案（抄一份就会漂移）。
+  const tipLiteral = viewSource.match(/const STRICT_MODE_TIP =\s*([\s\S]*?);\n/u);
+  assert.ok(tipLiteral !== null, 'client.js 缺 `const STRICT_MODE_TIP = …` 声明');
+  const STRICT_MODE_TIP = new Function(`return ${tipLiteral[1]};`)();
+  assert.strictEqual(typeof STRICT_MODE_TIP, 'string', 'STRICT_MODE_TIP 必须是字符串');
+  assert.strictEqual(STRICT_MODE_TIP.split('\n').length, 2, 'STRICT_MODE_TIP 应是两段（一个换行）');
+
+  const badges = findAll(card, (item) => item.props?.['aria-label'] === '严格模式说明');
+  assert.strictEqual(badges.length, 1, `「严格模式」后面的 ? 徽标应恰好 1 个，实际 ${badges.length}`);
+  const badge = badges[0];
+  assert.strictEqual(badge.props.className, 'ala-tip-badge', `? 徽标的 className 应是 ala-tip-badge，实际 ${badge.props.className}`);
+  assert.strictEqual(badge.props.role, 'img', '? 徽标应是 role="img"（非交互元素，靠原生 title 悬停）');
+  assert.strictEqual(badge.props.title, STRICT_MODE_TIP, 'title 必须**逐字**等于 STRICT_MODE_TIP');
+  assert.strictEqual(badge.props.title.length, STRICT_MODE_TIP.length, '? 徽标 title 长度必须等于 STRICT_MODE_TIP 长度');
+  assert.strictEqual(texts(badge).join(''), '?', '? 徽标里只应有半角 `?` 一个字符');
+  assert.strictEqual('tabIndex' in badge.props, false, '? 徽标不该带 tabIndex（不额外占一个 Tab 焦点）');
+  assert.strictEqual('aria-expanded' in badge.props, false, '? 徽标不再有开合状态（不该有 aria-expanded）');
+  // 徽标就在「严格模式」选项里面，且在文案之后。
+  assert.ok(
+    (segmentOptions[1].children ?? []).some((child) => child === badge || child?.props?.['aria-label'] === '严格模式说明'),
+    '? 徽标应挂在「严格模式」选项内部',
+  );
+
+  // 自绘气泡必须彻底消失：渲染树里没有 role="tooltip"、没有 .ala-tip-bubble 类。
+  assert.strictEqual(
+    findAll(card, (item) => item.props?.role === 'tooltip').length,
+    0,
+    '整棵渲染树里不该再有任何 role="tooltip" 节点',
+  );
+  assert.strictEqual(
+    findAll(card, (item) => String(item.props?.className ?? '').includes('tip-bubble')).length,
+    0,
+    '整棵渲染树里不该再有任何 tip-bubble 类',
+  );
+  // 源码级：气泡那套（节点 / 样式 / document 关闭）不该留下任何残迹，也不该留孤儿 CSS 规则。
+  assert.strictEqual(viewSource.includes('tooltip'), false, 'client.js 源码里不该再有 tooltip 字样');
+  assert.strictEqual(viewSource.includes('tip-bubble'), false, 'client.js 源码里不该再有 tip-bubble（含孤儿 CSS 规则）');
+  assert.strictEqual(/\.ala-tip\s*\{/u.test(viewSource), false, 'client.js 里不该再留 .ala-tip 包装层的孤儿规则');
+
   // ---- TTS 分区瘦身：逐条件播报文本字段不该再出现在分区里 ----
   const cardTexts = texts(card);
   for (const label of ['「需要你裁决」播报文本', '「本轮报错」播报文本', '「任务到待人工测试」播报文本', '兜底播报模板']) {
@@ -973,8 +1018,9 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   const tenVoiceKeys = ['Ask', 'Plan', 'TaskComplete', 'TurnEnd', 'Interrupt', 'Error', 'Stalled', 'AwaitingTest', 'Restart', 'Test'];
   for (const kind of tenVoiceKeys) assert.ok(viewMod.missingFieldKeys({}).includes(`voiceText${kind}`), `键表缺 voiceText${kind}`);
   console.log(
-    'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、TTS 分区无逐条件字段',
+    'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、? 徽标走原生 title（%d 字符、零 tooltip 节点）、TTS 分区无逐条件字段',
     conditionRows.length,
+    STRICT_MODE_TIP.length,
   );
 }
 

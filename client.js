@@ -252,8 +252,8 @@ window.__ModuleLoader__.load({
 			{ value: 'toast', label: '系统消息（Windows 通知）' },
 		];
 
-		/** 严格模式的完整说明（设置页「协议模式」行 `?` 的气泡正文 + `title` 悬停兜底共用同一份文案）。
-		 *  **逐字固定**：两段之间用换行分开，气泡靠 `whiteSpace:'pre-line'` 保留换行。
+		/** 严格模式的完整说明（设置页「协议模式」行 `?` 徽标的原生 `title` 提示正文）。
+		 *  **逐字固定**：两段之间用换行分开；原生 title 自己就按换行折行，不需要额外的样式配合。
 		 *  第二段讲默认模式为什么不发协议也不会漏报——用户最容易在「没发协议就切严格模式」时漏报，这里得说清。
 		 *  **文案逐字照抄用户原话，不要「修正」**：第二段 `默认模式 =插件` 的等号后面**确实没有空格**，
 		 *  这是用户给的原文（看起来像笔误，但按要求保留）。改这一行前先问，别顺手加空格。 */
@@ -265,7 +265,7 @@ window.__ModuleLoader__.load({
 		 *  默认 `tag-first`（默认模式）：标签优先，**没命中标签时仍用旧判定兜底**。 */
 		const PROTOCOL_MODE_OPTIONS = [
 			{ value: 'tag-first', label: '默认模式' },
-			// 严格模式需要一句「没发协议会漏报」的提醒：选项后面挂一个 `?` 说明气泡。
+			// 严格模式需要一句「没发协议会漏报」的提醒：选项后面挂一个 `?` 徽标（原生 title 提示）。
 			{ value: 'tag-only', label: '严格模式', tip: STRICT_MODE_TIP },
 		];
 
@@ -805,23 +805,15 @@ window.__ModuleLoader__.load({
 .ala-seg-opt[data-selected="true"][data-fallback="true"] { background: var(--a-brand); color: #fff; }
 .ala-seg-opt:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
 
-/* ---- 说明徽标（问号）与气泡 ---- */
-.ala-tip { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+/* ---- 说明徽标（问号）：只靠浏览器原生 title 提示，不自绘气泡 ---- */
 .ala-tip-badge {
-  width: 15px; height: 15px; border-radius: 999px; border: 1px solid currentColor;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; opacity: .8;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, .5);
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  font-size: 10px; font-weight: 700; line-height: 1; cursor: help; user-select: none;
 }
-.ala-tip-badge:hover { opacity: 1; }
-.ala-tip-badge:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
-.ala-tip-bubble {
-  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-  width: 340px; max-width: min(340px, 70vw); padding: 10px 12px;
-  border-radius: var(--a-radius-m); border: 1px solid var(--a-line);
-  background: var(--a-surface); color: var(--a-text);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
-  font-size: 12.5px; line-height: 18px; white-space: pre-line; z-index: 5;
-}
+.ala-seg-opt[data-selected="true"] .ala-tip-badge { color: rgba(255, 255, 255, .9); border-color: rgba(255, 255, 255, .65); }
 
 /* ---- 条件表：▶ | 条件 | 提醒 弹窗 铃声 语音播报 | 播报文本 ---- */
 .ala-table { border-top: 1px solid var(--a-line); overflow-x: auto; overscroll-behavior-x: contain; }
@@ -1173,56 +1165,21 @@ window.__ModuleLoader__.load({
 			return h('div', { className: 'ala-slots' }, h('span', { className: 'ala-slots-prefix' }, '注册到：'), items);
 		}
 
-		/** 选项后面的 `?` 说明图标 + 点开的气泡（`role="tooltip"`）。
+		/** 选项后面的 `?` 说明徽标：**没有任何自绘气泡**，说明正文交给浏览器原生 `title` 提示。
 		 *
-		 *  - 点击 / 回车 / 空格切换开合；开着时点**别处**也收起（document 上挂 mousedown，
-		 *    目标不在自身子树内就关）——气泡是绝对定位浮层，不收起来会盖住下面的行。
-		 *  - 点 `?` 时 `stopPropagation`：它挂在分段控件的选项里面，不拦住会顺手把选项也切了。
-		 *  - `title` 里放同一份说明，作为**悬停兜底**（未点开也能看到文案；鼠标悬停不依赖 JS）。
-		 *  - `aria-label` 用固定短名（「严格模式说明」），读屏念的是名字而不是整段说明。 */
+		 *  - `title` 放完整说明（逐字等于 `STRICT_MODE_TIP`），悬停即见，不依赖 JS、不占额外节点；
+		 *  - 刻意不给 `tabIndex`：原生 title 靠悬停就够，多一个 Tab 焦点只是噪音；
+		 *  - `role="img"` + `aria-label` 固定短名（「严格模式说明」），读屏念名字而不是整段说明；
+		 *  - 留着 `stopPropagation`：它挂在分段控件的选项里面，不拦住会顺手把选项也切了。 */
 		function TipBadge(props) {
 			const { text } = props;
-			const [open, setOpen] = React.useState(false);
-			const rootRef = React.useRef(null);
-			React.useEffect(() => {
-				if (open !== true) return undefined;
-				if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined;
-				const onDown = (event) => {
-					const root = rootRef.current;
-					if (root !== null && typeof root.contains === 'function' && root.contains(event?.target)) return;
-					setOpen(false);
-				};
-				document.addEventListener('mousedown', onDown);
-				return () => document.removeEventListener('mousedown', onDown);
-			}, [open]);
-			const toggle = () => setOpen((previous) => previous !== true);
-			return h(
-				'span',
-				{ ref: rootRef, className: 'ala-tip' },
-				h(
-					'span',
-					{
-						role: 'button',
-						tabIndex: 0,
-						'aria-label': '严格模式说明',
-						'aria-expanded': open === true,
-						title: text,
-						className: 'ala-tip-badge',
-						onClick: (event) => {
-							event?.stopPropagation?.();
-							toggle();
-						},
-						onKeyDown: (event) => {
-							if (event?.key !== 'Enter' && event?.key !== ' ') return;
-							event.preventDefault?.();
-							event?.stopPropagation?.();
-							toggle();
-						},
-					},
-					'?',
-				),
-				open === true ? h('div', { role: 'tooltip', className: 'ala-tip-bubble' }, text) : null,
-			);
+			return h('span', {
+				role: 'img',
+				'aria-label': '严格模式说明',
+				title: text,
+				className: 'ala-tip-badge',
+				onClick: (event) => event?.stopPropagation?.(),
+			}, '?');
 		}
 
 		/** 协议模式的分段控件（灰底胶囊 + 品牌蓝滑块，选中项白字）。
@@ -1232,7 +1189,7 @@ window.__ModuleLoader__.load({
 		 *  所以首帧不会闪一下等宽形态。
 		 *  **量不到就退化**（无布局的离线渲染、`offsetWidth` 拿不到）：`thumb` 置 null →
 		 *  选中项自己上品牌蓝底色（`data-fallback` + CSS，仍带过渡）。两条路都有过渡，别删。
-		 *  点击 `?` 不算选项点击（气泡自己 `stopPropagation`）。 */
+		 *  点击 `?` 不算选项点击（徽标自己 `stopPropagation`）。 */
 		function ProtocolSegmented(props) {
 			const { field, value, onChange } = props;
 			const list = field.options ?? [];

@@ -2,8 +2,8 @@
  *
  * 全部字段都是**扁平**的（单段名字）且带 `.volatile()`：volatile 字段不会因为
  * 修改而重载插件，而是以「活引用」的形式暴露在 apply() 拿到的 config 对象上，
- * 因此每次提醒现读 config 就能拿到最新值（dsh-switchman 的 host/config.js 用的
- * 是同一套约定）。
+ * 因此每次提醒现读 config 就能拿到最新值（扁平 volatile 字段 + 每次现读，配置改完立刻
+ * 生效，不需要重载插件）。
  *
  * 命名空间 = cordis.patch.yml 里的 loader 行 id（`- id: dsh-alarm`），见
  * host/routes.js 的 NS 常量说明。

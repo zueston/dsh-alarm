@@ -148,22 +148,15 @@
   .segmented .opt[data-selected="true"] { color: #fff; }
   .segmented .opt[data-selected="false"]:hover { color: var(--brand); }
 
-  .tip { position: relative; display: inline-flex; }
+  /* 说明徽标（问号）：只靠浏览器原生 title 提示，不自绘气泡 */
   .tip-badge {
-    width: 15px; height: 15px; border-radius: 999px; border: 1px solid currentColor;
     display: inline-flex; align-items: center; justify-content: center;
-    font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; opacity: .8;
+    width: 15px; height: 15px; border-radius: 50%;
+    border: 1px solid rgba(128, 128, 128, .5);
+    color: #6b7280;
+    font-size: 10px; font-weight: 700; line-height: 1; cursor: help; user-select: none;
   }
-  .tip-badge:hover { opacity: 1; }
-  .tip-bubble {
-    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-    width: 340px; padding: 10px 12px; border-radius: var(--radius-m);
-    border: 1px solid var(--line); background: var(--surface);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
-    font-size: 12.5px; line-height: 18px; color: var(--label);
-    white-space: pre-line; display: none; z-index: 5;
-  }
-  .tip[data-open="true"] .tip-bubble { display: block; }
+  .segmented .opt[data-selected="true"] .tip-badge { color: rgba(255, 255, 255, .9); border-color: rgba(255, 255, 255, .65); }
 
   /* 条件表：▶ | 条件 | 4 通道 | 播报文本 */
   .table { border-top: 1px solid var(--line); }
@@ -307,11 +300,7 @@
           <span class="opt" data-value="default" data-selected="true">默认模式</span>
           <span class="opt" data-value="strict" data-selected="false">
             严格模式
-            <span class="tip" id="strictTip" data-open="false">
-              <span class="tip-badge" role="button" tabindex="0" aria-label="严格模式说明" title="严格模式说明">?</span>
-              <span class="tip-bubble">严格模式只认 agent 在回复里写的标签（[[ALARM:TEST:任务名]]、[[ALARM:RESTART]] 等），不再猜措辞——更准，但必须先点「编辑报警规则」把协议发给 agent，否则它会漏报：重启与待测都不会提醒。
-默认模式 =插件自主判断，可不发协议，正文提到「要重启 DSH」、状态文件翻到「待人工测试」仍然会提醒。</span>
-            </span>
+            <span class="tip-badge" role="img" aria-label="严格模式说明" title="严格模式只认 agent 在回复里写的标签（[[ALARM:TEST:任务名]]、[[ALARM:RESTART]] 等），不再猜措辞——更准，但必须先点「编辑报警规则」把协议发给 agent，否则它会漏报：重启与待测都不会提醒。&#10;默认模式 =插件自主判断，可不发协议，正文提到「要重启 DSH」、状态文件翻到「待人工测试」仍然会提醒。">?</span>
           </span>
         </div>
         <p class="section-desc" style="margin:10px 0 0">
@@ -532,21 +521,12 @@
 
   seg.querySelectorAll('.opt').forEach((opt) => {
     opt.addEventListener('click', (event) => {
-      if (event.target.closest('.tip')) return;
+      // 点 `?` 徽标不算点选项（原生 title 提示，没有开合状态）。
+      if (event.target.closest('.tip-badge')) return;
       seg.querySelectorAll('.opt').forEach((node) => node.setAttribute('data-selected', 'false'));
       opt.setAttribute('data-selected', 'true');
       layoutThumb();
     });
-  });
-
-  // ? 气泡
-  const tip = document.getElementById('strictTip');
-  tip.querySelector('.tip-badge').addEventListener('click', (event) => {
-    event.stopPropagation();
-    tip.setAttribute('data-open', tip.getAttribute('data-open') === 'true' ? 'false' : 'true');
-  });
-  document.addEventListener('click', (event) => {
-    if (!event.target.closest('#strictTip')) tip.setAttribute('data-open', 'false');
   });
 
   // 注册范围至少留一个
