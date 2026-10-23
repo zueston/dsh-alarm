@@ -252,8 +252,9 @@ window.__ModuleLoader__.load({
 			{ value: 'toast', label: '系统消息（Windows 通知）' },
 		];
 
-		/** 严格模式的完整说明（设置页「协议模式」行 `?` 徽标的原生 `title` 提示正文）。
-		 *  **逐字固定**：两段之间用换行分开；原生 title 自己就按换行折行，不需要额外的样式配合。
+		/** 严格模式的完整说明（设置页「协议模式」行 `?` 徽标的说明卡片正文）。
+		 *  **逐字固定**：两段之间用 `\n` 分开，卡片靠 `white-space: pre-wrap` 让换行真的生效
+		 *  （见 `TIP_PANEL_STYLE`）；正文一个字都不要动，包括下面那条「等号后没空格」。
 		 *  第二段讲默认模式为什么不发协议也不会漏报——用户最容易在「没发协议就切严格模式」时漏报，这里得说清。
 		 *  **文案逐字照抄用户原话，不要「修正」**：第二段 `默认模式 =插件` 的等号后面**确实没有空格**，
 		 *  这是用户给的原文（看起来像笔误，但按要求保留）。改这一行前先问，别顺手加空格。 */
@@ -265,7 +266,7 @@ window.__ModuleLoader__.load({
 		 *  默认 `tag-first`（默认模式）：标签优先，**没命中标签时仍用旧判定兜底**。 */
 		const PROTOCOL_MODE_OPTIONS = [
 			{ value: 'tag-first', label: '默认模式' },
-			// 严格模式需要一句「没发协议会漏报」的提醒：选项后面挂一个 `?` 徽标（原生 title 提示）。
+			// 严格模式需要一句「没发协议会漏报」的提醒：选项后面挂一个 `?` 徽标（点开是自绘说明卡片）。
 			{ value: 'tag-only', label: '严格模式', tip: STRICT_MODE_TIP },
 		];
 
@@ -805,7 +806,7 @@ window.__ModuleLoader__.load({
 .ala-seg-opt[data-selected="true"][data-fallback="true"] { background: var(--a-brand); color: #fff; }
 .ala-seg-opt:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
 
-/* ---- 说明徽标（问号）：只靠浏览器原生 title 提示，不自绘气泡 ---- */
+/* ---- 说明徽标（问号）：徽标本身走 CSS，包裹层与弹出的说明卡片走行内 style（见 TIP_WRAP_STYLE / TIP_PANEL_STYLE） ---- */
 .ala-tip-badge {
   display: inline-flex; align-items: center; justify-content: center;
   width: 15px; height: 15px; border-radius: 50%;
@@ -1165,21 +1166,126 @@ window.__ModuleLoader__.load({
 			return h('div', { className: 'ala-slots' }, h('span', { className: 'ala-slots-prefix' }, '注册到：'), items);
 		}
 
-		/** 选项后面的 `?` 说明徽标：**没有任何自绘气泡**，说明正文交给浏览器原生 `title` 提示。
+		/** 说明卡片的外层包裹：给绝对定位的卡片当定位基准，同时把「鼠标移进卡片」算作还在
+		 *  包裹层内部（`onMouseLeave` 靠 DOM 包含关系判定，不看几何位置）——所以鼠标从徽标
+		 *  移进卡片不会关闭。 */
+		const TIP_WRAP_STYLE = { position: 'relative', display: 'inline-flex', alignItems: 'center' };
+
+		/** 说明卡片的行内样式（**逐值固定**，要改先问）。
+		 *  `whiteSpace: 'pre-wrap'` 是让 `STRICT_MODE_TIP` 里的 `\n` 真的换行的唯一开关；
+		 *  `width: min(360px, 64vw)` + `maxHeight: 240px` + `overflowY: 'auto'`：长文案自己滚，
+		 *  不把弹窗撑变形。`pointerEvents: 'auto'` 是给将来外层加遮罩留的口子，现在同值无害。 */
+		const TIP_PANEL_STYLE = {
+			position: 'absolute',
+			top: '24px',
+			left: '0',
+			zIndex: 30,
+			pointerEvents: 'auto',
+			width: 'min(360px, 64vw)',
+			maxHeight: '240px',
+			overflowY: 'auto',
+			padding: '8px 10px',
+			borderRadius: '8px',
+			border: '1px solid rgba(128,128,128,.28)',
+			background: 'var(--dsw-alias-bg-elevated, #ffffff)',
+			boxShadow: '0 8px 24px rgba(0,0,0,.18)',
+			fontSize: '12px',
+			lineHeight: 1.6,
+			whiteSpace: 'pre-wrap',
+			color: 'var(--dsw-alias-label-primary, #111827)',
+		};
+
+		/** 选项后面的 `?` 说明徽标：点开是**自绘卡片**，不再用原生 `title`
+		 *  （原生提示是系统画的灰白方块、延迟约 1 秒，而且会和自绘卡片并成两套气泡）。
 		 *
-		 *  - `title` 放完整说明（逐字等于 `STRICT_MODE_TIP`），悬停即见，不依赖 JS、不占额外节点；
-		 *  - 刻意不给 `tabIndex`：原生 title 靠悬停就够，多一个 Tab 焦点只是噪音；
-		 *  - `role="img"` + `aria-label` 固定短名（「严格模式说明」），读屏念名字而不是整段说明；
-		 *  - 留着 `stopPropagation`：它挂在分段控件的选项里面，不拦住会顺手把选项也切了。 */
+		 *  - 悬停即出：包裹层 `onMouseEnter` 打开 / `onMouseLeave` 关闭（卡片在包裹层内部，
+		 *    鼠标移进卡片不算离开）；
+		 *  - 点徽标切换开合，并且 `stopPropagation`——徽标长在分段控件的选项里面，
+		 *    不拦住会把「协议模式」顺手切到严格模式；
+		 *  - 键盘 Enter / 空格切换（`preventDefault` 免得空格滚页面；同样拦住冒泡，
+		 *    否则选项自己的 Enter 处理会把模式切走）；`role="button"` +
+		 *    `tabIndex={0}` + `aria-expanded` 跟着开合走；
+		 *  - 点别处关闭：打开时挂一条 `document` `mousedown`，命中包裹层内部就忽略，卸载/关闭即摘掉。
+		 *  **刻意不给徽标 `title`**：一套气泡就够，两套会同时弹出来。
+		 *  正文逐字等于 `STRICT_MODE_TIP`，换行靠卡片的 `pre-wrap` 生效。
+		 *
+		 *  ponytail: 开合是**一个布尔**——悬停与点击同权，点开之后把鼠标移开仍会关。
+		 *  天花板：没有「钉住后鼠标移开也不关」的独立状态（需求里那句「点击钉住」按
+		 *  「点了就保持打开、移动进卡片也不关」实现）。升级路径：真需要钉住时拆成
+		 *  `hover` + `pinned` 两个 state，`onMouseLeave` 只在 `pinned === false` 时关。 */
 		function TipBadge(props) {
-			const { text } = props;
-			return h('span', {
-				role: 'img',
-				'aria-label': '严格模式说明',
-				title: text,
-				className: 'ala-tip-badge',
-				onClick: (event) => event?.stopPropagation?.(),
-			}, '?');
+			const { text, defaultOpen } = props;
+			const [open, setOpen] = React.useState(defaultOpen === true);
+			const wrapRef = React.useRef(null);
+
+			React.useEffect(() => {
+				if (!open) return undefined;
+				if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined;
+				const onDocumentDown = (event) => {
+					const wrap = wrapRef.current;
+					const target = event?.target;
+					const inside =
+						wrap !== null &&
+						wrap !== undefined &&
+						typeof wrap.contains === 'function' &&
+						target !== null &&
+						target !== undefined &&
+						wrap.contains(target);
+					if (inside) return;
+					setOpen(false);
+				};
+				document.addEventListener('mousedown', onDocumentDown);
+				return () => {
+					document.removeEventListener('mousedown', onDocumentDown);
+				};
+			}, [open]);
+
+			return h(
+				'span',
+				{
+					className: 'ala-tip',
+					ref: wrapRef,
+					style: TIP_WRAP_STYLE,
+					onMouseEnter: () => setOpen(true),
+					onMouseLeave: () => setOpen(false),
+				},
+				h(
+					'span',
+					{
+						role: 'button',
+						tabIndex: 0,
+						'aria-label': '严格模式说明',
+						'aria-expanded': open,
+						className: 'ala-tip-badge',
+						onClick: (event) => {
+							event?.stopPropagation?.();
+							setOpen(!open);
+						},
+						onKeyDown: (event) => {
+							if (event?.key !== 'Enter' && event?.key !== ' ') return;
+							// 空格要 preventDefault（否则滚页面）；和点击同理，不能再冒到选项上去切模式。
+							event.preventDefault?.();
+							event?.stopPropagation?.();
+							setOpen(!open);
+						},
+					},
+					'?',
+				),
+				open
+					? h(
+							'span',
+							{
+								role: 'tooltip',
+								className: 'ala-tip-panel',
+								style: TIP_PANEL_STYLE,
+								// 卡片长在分段控件选项内部：在卡片里点一下（选中文字、拖滚动条）不能顺手把
+								// 协议模式切成严格模式，也不关闭卡片（`document` 那条会判定「在包裹层内部」）。
+								onClick: (event) => event?.stopPropagation?.(),
+							},
+							text,
+						)
+					: null,
+			);
 		}
 
 		/** 协议模式的分段控件（灰底胶囊 + 品牌蓝滑块，选中项白字）。
@@ -2672,6 +2778,11 @@ window.__ModuleLoader__.load({
 			 *  `host/routes.js` 的 FIELDS 键表对账），`missingFieldKeys(stale)` 返回缺的那几个。
 			 *  宿主 loader 只读 `inject` / `apply`，多挂一个纯函数不影响装载。 */
 			missingFieldKeys,
+			/** 说明徽标组件导出：离线自测直接渲染它验「开合 → 恰好 1 个 `role="tooltip"` 节点、
+			 *  正文逐字等于 `STRICT_MODE_TIP`、样式逐值到位」。`defaultOpen` 只给离线自测用
+			 *  （真实渲染永远不传，开合只由悬停 / 点击 / 键盘驱动）。
+			 *  宿主 loader 只读 `inject` / `apply`，多挂一个组件不影响装载。 */
+			TipBadge,
 			apply(ctx) {
 				// **预加载配置**：插件一装上就把配置
 				// 拉进模块级缓存，等用户点侧栏「报警提醒」时数据已经在内存里——弹窗瞬开，

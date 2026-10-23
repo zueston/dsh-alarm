@@ -148,15 +148,27 @@
   .segmented .opt[data-selected="true"] { color: #fff; }
   .segmented .opt[data-selected="false"]:hover { color: var(--brand); }
 
-  /* 说明徽标（问号）：只靠浏览器原生 title 提示，不自绘气泡 */
+  /* 说明徽标（问号）+ 说明卡片：白底圆角细边框 + 柔和阴影，悬停即出、点击钉住、点别处关 */
+  .tip { position: relative; display: inline-flex; align-items: center; }
   .tip-badge {
     display: inline-flex; align-items: center; justify-content: center;
     width: 15px; height: 15px; border-radius: 50%;
     border: 1px solid rgba(128, 128, 128, .5);
-    color: #6b7280;
+    color: var(--label-2);
     font-size: 10px; font-weight: 700; line-height: 1; cursor: help; user-select: none;
   }
   .segmented .opt[data-selected="true"] .tip-badge { color: rgba(255, 255, 255, .9); border-color: rgba(255, 255, 255, .65); }
+  .tip-panel {
+    position: absolute; top: 24px; left: 0; z-index: 30; pointer-events: auto;
+    width: min(360px, 64vw); max-height: 240px; overflow-y: auto;
+    padding: 8px 10px; border-radius: 8px;
+    border: 1px solid rgba(128, 128, 128, .28);
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+    font-size: 12px; line-height: 1.6; white-space: pre-wrap;
+    color: var(--label);
+  }
+  .tip-panel[hidden] { display: none; }
 
   /* 条件表：▶ | 条件 | 4 通道 | 播报文本 */
   .table { border-top: 1px solid var(--line); }
@@ -300,7 +312,10 @@
           <span class="opt" data-value="default" data-selected="true">默认模式</span>
           <span class="opt" data-value="strict" data-selected="false">
             严格模式
-            <span class="tip-badge" role="img" aria-label="严格模式说明" title="严格模式只认 agent 在回复里写的标签（[[ALARM:TEST:任务名]]、[[ALARM:RESTART]] 等），不再猜措辞——更准，但必须先点「编辑报警规则」把协议发给 agent，否则它会漏报：重启与待测都不会提醒。&#10;默认模式 =插件自主判断，可不发协议，正文提到「要重启 DSH」、状态文件翻到「待人工测试」仍然会提醒。">?</span>
+            <span class="tip">
+              <span class="tip-badge" role="button" tabindex="0" aria-label="严格模式说明" aria-expanded="false">?</span>
+              <span class="tip-panel" role="tooltip" hidden>严格模式只认 agent 在回复里写的标签（[[ALARM:TEST:任务名]]、[[ALARM:RESTART]] 等），不再猜措辞——更准，但必须先点「编辑报警规则」把协议发给 agent，否则它会漏报：重启与待测都不会提醒。&#10;默认模式 =插件自主判断，可不发协议，正文提到「要重启 DSH」、状态文件翻到「待人工测试」仍然会提醒。</span>
+            </span>
           </span>
         </div>
         <p class="section-desc" style="margin:10px 0 0">
@@ -521,11 +536,42 @@
 
   seg.querySelectorAll('.opt').forEach((opt) => {
     opt.addEventListener('click', (event) => {
-      // 点 `?` 徽标不算点选项（原生 title 提示，没有开合状态）。
-      if (event.target.closest('.tip-badge')) return;
+      // 点 `?` 徽标（或卡片本体）不算点选项——徽标自己会 stopPropagation，这里再兜一层。
+      if (event.target.closest('.tip')) return;
       seg.querySelectorAll('.opt').forEach((node) => node.setAttribute('data-selected', 'false'));
       opt.setAttribute('data-selected', 'true');
       layoutThumb();
+    });
+  });
+
+  // ---- 说明卡片：悬停即出、点击钉住/收起、键盘 Enter/空格开合、点别处关 ----
+  document.querySelectorAll('.tip').forEach((tip) => {
+    const badge = tip.querySelector('.tip-badge');
+    const panel = tip.querySelector('.tip-panel');
+    const setOpen = (next) => {
+      badge.setAttribute('aria-expanded', next ? 'true' : 'false');
+      panel.hidden = !next;
+    };
+    const toggle = () => setOpen(badge.getAttribute('aria-expanded') !== 'true');
+    tip.addEventListener('mouseenter', () => setOpen(true));
+    tip.addEventListener('mouseleave', () => setOpen(false));
+    badge.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggle();
+    });
+    badge.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggle();
+    });
+  });
+
+  // 点别处关闭：命中包裹层内部就不动。
+  document.addEventListener('mousedown', (event) => {
+    document.querySelectorAll('.tip').forEach((tip) => {
+      if (tip.contains(event.target)) return;
+      tip.querySelector('.tip-badge').setAttribute('aria-expanded', 'false');
+      tip.querySelector('.tip-panel').hidden = true;
     });
   });
 

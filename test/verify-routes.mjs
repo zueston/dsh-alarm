@@ -725,8 +725,9 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
 //   - 条件表 10 行；表头**两行**（第一行四个通道总开关，第二行六个文字标签）；
 //   - 每行恰好 4 个开关 + 1 个播报文本输入；
 //   - 协议模式是分段控件（2 个选项，值仍是 tag-first / tag-only）；
-//   - 「严格模式」后面是 15×15 的 `?` 徽标，说明正文**只走原生 title**（逐字等于 `STRICT_MODE_TIP`）：
-//     整棵树里没有 `role="tooltip"` 节点、源码里没有 tip-bubble / 气泡那套残留；
+//   - 「严格模式」后面是 15×15 的 `?` 徽标，点开是**自绘说明卡片**（正文逐字等于 `STRICT_MODE_TIP`）：
+//     徽标 `role="button"` + `aria-label="严格模式说明"` + 无 `title` 属性；未开合时整棵树没有
+//     `role="tooltip"` 节点，开合后恰好 1 个；旧气泡那套 `tip-bubble` 类全树、全文都没有残留；
 //   - **TTS 分区里不再有逐条件播报文本字段**（那 10 个 `voiceText*` 已经上移到条件表最后一列）。
 {
   /** 组件渲染帧：hooks 按调用顺序编号（迷你版，够单次静态渲染用）。 */
@@ -965,7 +966,7 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   );
   assert.strictEqual(segmentOptions[0].props['data-selected'], 'true', '默认模式应初始选中');
 
-  // ---- 严格模式说明：15×15 的 `?` 徽标 + **原生 title**（不再自绘气泡）----
+  // ---- 严格模式说明：15×15 的 `?` 徽标 + **自绘说明卡片**（不再用原生 title）----
   // `STRICT_MODE_TIP` 是 client.js 里的模块内常量，这里从源码把它求值出来做逐字比对，
   // 免得测试里再抄一份文案（抄一份就会漂移）。
   const tipLiteral = viewSource.match(/const STRICT_MODE_TIP =\s*([\s\S]*?);\n/u);
@@ -978,33 +979,74 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   assert.strictEqual(badges.length, 1, `「严格模式」后面的 ? 徽标应恰好 1 个，实际 ${badges.length}`);
   const badge = badges[0];
   assert.strictEqual(badge.props.className, 'ala-tip-badge', `? 徽标的 className 应是 ala-tip-badge，实际 ${badge.props.className}`);
-  assert.strictEqual(badge.props.role, 'img', '? 徽标应是 role="img"（非交互元素，靠原生 title 悬停）');
-  assert.strictEqual(badge.props.title, STRICT_MODE_TIP, 'title 必须**逐字**等于 STRICT_MODE_TIP');
-  assert.strictEqual(badge.props.title.length, STRICT_MODE_TIP.length, '? 徽标 title 长度必须等于 STRICT_MODE_TIP 长度');
+  assert.strictEqual(badge.props.role, 'button', '? 徽标应是 role="button"（可以点击开合）');
+  assert.strictEqual('title' in badge.props, false, '? 徽标不该再带 title 属性（避免原生气泡与自绘卡片两套并存）');
+  assert.strictEqual(badge.props.tabIndex, 0, '? 徽标应进 Tab 序列（键盘可开合）');
+  assert.strictEqual(badge.props['aria-expanded'], false, '未开合时 aria-expanded 应为 false');
   assert.strictEqual(texts(badge).join(''), '?', '? 徽标里只应有半角 `?` 一个字符');
-  assert.strictEqual('tabIndex' in badge.props, false, '? 徽标不该带 tabIndex（不额外占一个 Tab 焦点）');
-  assert.strictEqual('aria-expanded' in badge.props, false, '? 徽标不再有开合状态（不该有 aria-expanded）');
+
+  // 包裹层：卡片的定位基准，也是「鼠标移进卡片不算离开」的判定边界。
+  const tipWrap = findBy(card, (item) => item.props.className === 'ala-tip');
+  assert.ok(tipWrap !== null, '? 徽标外面应有 .ala-tip 包裹层');
+  assert.strictEqual(tipWrap.props.style.position, 'relative', '包裹层应 position:relative');
+  assert.strictEqual(tipWrap.props.style.display, 'inline-flex', '包裹层应 display:inline-flex');
+  assert.strictEqual(tipWrap.props.style.alignItems, 'center', '包裹层应 align-items:center');
   // 徽标就在「严格模式」选项里面，且在文案之后。
   assert.ok(
-    (segmentOptions[1].children ?? []).some((child) => child === badge || child?.props?.['aria-label'] === '严格模式说明'),
+    (segmentOptions[1].children ?? []).some((child) => child === tipWrap || child?.props?.className === 'ala-tip'),
     '? 徽标应挂在「严格模式」选项内部',
   );
 
-  // 自绘气泡必须彻底消失：渲染树里没有 role="tooltip"、没有 .ala-tip-bubble 类。
+  // 默认（未开合）整棵树里不该有卡片。
   assert.strictEqual(
     findAll(card, (item) => item.props?.role === 'tooltip').length,
     0,
-    '整棵渲染树里不该再有任何 role="tooltip" 节点',
+    '未开合时整棵渲染树里不该有 role="tooltip" 节点',
   );
+
+  // 把开合 state 置为 true（`defaultOpen` 这个口子只给离线自测用）：恰好 1 个 role="tooltip"，
+  // 正文逐字等于 STRICT_MODE_TIP，样式逐值到位（卡片是行内 style，值就写死在 TIP_PANEL_STYLE）。
+  const openTip = renderTree(MiniReact.createElement(viewMod.TipBadge, { text: STRICT_MODE_TIP, defaultOpen: true }));
+  const tipPanels = findAll(openTip, (item) => item.props?.role === 'tooltip');
+  assert.strictEqual(tipPanels.length, 1, `开合后应有恰好 1 个 role="tooltip" 节点，实际 ${tipPanels.length}`);
+  const tipPanel = tipPanels[0];
+  assert.strictEqual(texts(tipPanel).join(''), STRICT_MODE_TIP, '卡片正文必须**逐字**等于 STRICT_MODE_TIP');
+  assert.strictEqual(texts(tipPanel).join('').length, STRICT_MODE_TIP.length, '卡片正文长度必须等于 STRICT_MODE_TIP 长度');
+  const openBadge = findBy(openTip, (item) => item.props?.['aria-label'] === '严格模式说明');
+  assert.strictEqual(openBadge.props['aria-expanded'], true, '开合后 aria-expanded 应为 true');
+  const panelStyle = tipPanel.props.style ?? {};
+  const styleWanted = {
+    position: 'absolute',
+    top: '24px',
+    left: '0',
+    zIndex: 30,
+    pointerEvents: 'auto',
+    width: 'min(360px, 64vw)',
+    maxHeight: '240px',
+    overflowY: 'auto',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: '1px solid rgba(128,128,128,.28)',
+    background: 'var(--dsw-alias-bg-elevated, #ffffff)',
+    boxShadow: '0 8px 24px rgba(0,0,0,.18)',
+    fontSize: '12px',
+    lineHeight: 1.6,
+    whiteSpace: 'pre-wrap',
+    color: 'var(--dsw-alias-label-primary, #111827)',
+  };
+  for (const [key, wanted] of Object.entries(styleWanted)) {
+    assert.strictEqual(panelStyle[key], wanted, `说明卡片 style.${key} 应是 ${JSON.stringify(wanted)}，实际 ${JSON.stringify(panelStyle[key])}`);
+  }
+
+  // 旧气泡那套（`.ala-tip-bubble`）必须彻底消失：渲染树没有、源码也没有残留规则。
   assert.strictEqual(
     findAll(card, (item) => String(item.props?.className ?? '').includes('tip-bubble')).length,
     0,
     '整棵渲染树里不该再有任何 tip-bubble 类',
   );
-  // 源码级：气泡那套（节点 / 样式 / document 关闭）不该留下任何残迹，也不该留孤儿 CSS 规则。
-  assert.strictEqual(viewSource.includes('tooltip'), false, 'client.js 源码里不该再有 tooltip 字样');
   assert.strictEqual(viewSource.includes('tip-bubble'), false, 'client.js 源码里不该再有 tip-bubble（含孤儿 CSS 规则）');
-  assert.strictEqual(/\.ala-tip\s*\{/u.test(viewSource), false, 'client.js 里不该再留 .ala-tip 包装层的孤儿规则');
+  // 卡片确实是自绘的（源码里挂着 role="tooltip" 的节点），不是靠原生 title。
+  assert.ok(viewSource.includes("role: 'tooltip'"), 'client.js 里应有自绘说明卡片（role="tooltip"）');
 
   // ---- TTS 分区瘦身：逐条件播报文本字段不该再出现在分区里 ----
   const cardTexts = texts(card);
@@ -1018,7 +1060,7 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   const tenVoiceKeys = ['Ask', 'Plan', 'TaskComplete', 'TurnEnd', 'Interrupt', 'Error', 'Stalled', 'AwaitingTest', 'Restart', 'Test'];
   for (const kind of tenVoiceKeys) assert.ok(viewMod.missingFieldKeys({}).includes(`voiceText${kind}`), `键表缺 voiceText${kind}`);
   console.log(
-    'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、? 徽标走原生 title（%d 字符、零 tooltip 节点）、TTS 分区无逐条件字段',
+    'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、? 徽标点开自绘卡片（%d 字符、无 title 属性、开合 0→1 个 tooltip 节点）、TTS 分区无逐条件字段',
     conditionRows.length,
     STRICT_MODE_TIP.length,
   );
