@@ -53,6 +53,7 @@ const FIELDS = {
 	alertTurnEnd: { kind: "bool", def: false },
 	alertTurnInterrupt: { kind: "bool", def: false },
 	alertTurnError: { kind: "bool", def: true },
+	alertStalled: { kind: "bool", def: true },
 	alertTest: { kind: "bool", def: true },
 	alertAwaitingTest: { kind: "bool", def: true },
 	alertRestart: { kind: "bool", def: true },
@@ -69,6 +70,7 @@ const FIELDS = {
 	voiceTextTurnEnd: { kind: "string", def: "本轮结束" },
 	voiceTextInterrupt: { kind: "string", def: "本轮中断" },
 	voiceTextError: { kind: "string", def: "本轮报错" },
+	voiceTextStalled: { kind: "string", def: "我停下来了，没有后续动作" },
 	voiceTextAwaitingTest: { kind: "string", def: "需要你手工测试" },
 	voiceTextRestart: { kind: "string", def: "需要重启 DSH" },
 	voiceTextTest: { kind: "string", def: "这是语音测试示例" },
@@ -94,6 +96,7 @@ const FIELDS = {
 	popupTurnEnd: { kind: "bool", def: false },
 	popupTurnInterrupt: { kind: "bool", def: false },
 	popupTurnError: { kind: "bool", def: false },
+	popupStalled: { kind: "bool", def: false },
 	popupTest: { kind: "bool", def: true },
 	soundAsk: { kind: "bool", def: true },
 	soundPlan: { kind: "bool", def: true },
@@ -103,6 +106,7 @@ const FIELDS = {
 	soundTurnEnd: { kind: "bool", def: true },
 	soundTurnInterrupt: { kind: "bool", def: true },
 	soundTurnError: { kind: "bool", def: true },
+	soundStalled: { kind: "bool", def: true },
 	soundTest: { kind: "bool", def: true },
 	voiceAsk: { kind: "bool", def: true },
 	voicePlan: { kind: "bool", def: true },
@@ -112,6 +116,7 @@ const FIELDS = {
 	voiceTurnEnd: { kind: "bool", def: true },
 	voiceTurnInterrupt: { kind: "bool", def: true },
 	voiceTurnError: { kind: "bool", def: true },
+	voiceStalled: { kind: "bool", def: true },
 	voiceTest: { kind: "bool", def: true },
 	// 「待人工测试」提醒的批次/聚合规则（合并测试批次：一批任务只响一次、响时带待测清单）。
 	// 四个字段都是扁平字段（不做嵌套对象，否则设置页读不到）。
@@ -119,6 +124,8 @@ const FIELDS = {
 	awaitingTestAnchor: { kind: "string", def: "批次" },
 	awaitingTestQuietSeconds: { kind: "number", def: 0, min: 0, max: 86_400 },
 	awaitingTestSummary: { kind: "bool", def: true },
+	// 严格输出协议：只认正文里独占一行的 [[ALARM:…]] 标签（默认开）。
+	protocolMode: { kind: "bool", def: true },
 	throttleSeconds: { kind: "number", def: 4, min: 0, max: 3600 },
 	askLatchSeconds: { kind: "number", def: 15, min: 0, max: 86_400 },
 };

@@ -44,6 +44,8 @@ export const Config = z.object({
 	alertTurnInterrupt: z.boolean().default(false).volatile(),
 	/** 一轮异常报错（reason 不属于中断类）时提醒（默认开：报错多半要人看一眼）。 */
 	alertTurnError: z.boolean().default(true).volatile(),
+	/** agent 一轮正常结束、但没调用任何工具也没请你裁决（且该会话有活跃 goal）时提醒（默认开）。 */
+	alertStalled: z.boolean().default(true).volatile(),
 	/** 设置页「测试提醒」按钮是否真的响铃（默认开）。 */
 	alertTest: z.boolean().default(true).volatile(),
 	/** 任务包被推进到「待人工测试」时提醒（状态.md 的「当前阶段」真的从别的值变成它时才响）。 */
@@ -67,6 +69,7 @@ export const Config = z.object({
 	voiceTextTurnEnd: z.string().default("本轮结束").volatile(),
 	voiceTextInterrupt: z.string().default("本轮中断").volatile(),
 	voiceTextError: z.string().default("本轮报错").volatile(),
+	voiceTextStalled: z.string().default("我停下来了，没有后续动作").volatile(),
 	voiceTextAwaitingTest: z.string().default("需要你手工测试").volatile(),
 	voiceTextRestart: z.string().default("需要重启 DSH").volatile(),
 	voiceTextTest: z.string().default("这是语音测试示例").volatile(),
@@ -100,6 +103,8 @@ export const Config = z.object({
 	popupTurnInterrupt: z.boolean().default(false).volatile(),
 	/** 本轮报错时弹窗（默认不弹）。 */
 	popupTurnError: z.boolean().default(false).volatile(),
+	/** agent 停下来且没有后续动作时弹窗（默认不弹：与「本轮结束」同属轻事件）。 */
+	popupStalled: z.boolean().default(false).volatile(),
 	/** 手工测试提醒时弹窗。 */
 	popupTest: z.boolean().default(true).volatile(),
 
@@ -112,6 +117,7 @@ export const Config = z.object({
 	soundTurnEnd: z.boolean().default(true).volatile(),
 	soundTurnInterrupt: z.boolean().default(true).volatile(),
 	soundTurnError: z.boolean().default(true).volatile(),
+	soundStalled: z.boolean().default(true).volatile(),
 	soundTest: z.boolean().default(true).volatile(),
 
 	// ---- 每个条件的语音播报开关（与语音播报总开关是「与」关系）-----------
@@ -123,6 +129,7 @@ export const Config = z.object({
 	voiceTurnEnd: z.boolean().default(true).volatile(),
 	voiceTurnInterrupt: z.boolean().default(true).volatile(),
 	voiceTurnError: z.boolean().default(true).volatile(),
+	voiceStalled: z.boolean().default(true).volatile(),
 	voiceTest: z.boolean().default(true).volatile(),
 
 	// ---- 「待人工测试」提醒的批次/聚合规则（合并测试批次用）-----------------
@@ -135,6 +142,12 @@ export const Config = z.object({
 	awaitingTestQuietSeconds: z.number().min(0).default(0).volatile(),
 	/** 响的时候正文是否附「还有 N 个任务待测」清单。 */
 	awaitingTestSummary: z.boolean().default(true).volatile(),
+
+	// ---- 严格输出协议（agent 在正文里独占一行写 [[ALARM:…]] 标签）-----------------
+	/** 只有正文里写了标签才算（默认开）：
+	 *  开 → 「需要重启 DSH」不再看正文正则、「待人工测试」不再看状态文件，只认标签；
+	 *  关 → 两者按旧行为判定，标签仍生效（作为额外通道）。 */
+	protocolMode: z.boolean().default(true).volatile(),
 
 	/** 同一类提醒的最小间隔（秒）。 */
 	throttleSeconds: z.number().min(0).default(4).volatile(),

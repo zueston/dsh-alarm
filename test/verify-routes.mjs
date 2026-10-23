@@ -6,8 +6,10 @@
  *   - **5 处槽位注册**：`sidebar.panellist`(33)、`shell.overlay`×2（设置弹窗
  *     `dsh-alarm.settings-dialog` order 120 + 规则弹窗 `dsh-alarm.rules-dialog` order 121）、
  *     `settings.section`(51)、`plugins.bundle.config`；**绝不注册 `main`**（白屏根因，已删除）；
- *   - 设置字段总数 **63**；`GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
- *     里第一个 ```text 围栏块的字符数。
+ *   - 设置字段总数 **69**；`GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
+ *     里第一个 ```text 围栏块的字符数；
+ *   - `lib/alarm.js` 的 `parseAlarmTags`（严格输出协议）：6 个标签各一条 + 行内出现不匹配
+ *     + 大小写错误不匹配 + TEST 空任务名。
  *
  *  **默认静默**：会真的响铃/弹窗的那段（POST /test）默认跳过，只有显式
  *  `DSH_ALARM_TEST_RING=1` 才跑——默认环境下本脚本不出声、不弹窗。
@@ -104,7 +106,7 @@ let snapshot;
   assert.ok(Array.isArray(payload.options.wavs), 'wavs 必须是数组');
   assert.ok(payload.options.wavs.length > 20, `wavs 太少: ${payload.options.wavs.length}`);
   assert.ok(Array.isArray(payload.options.voices), 'voices 必须是数组');
-  assert.strictEqual(Object.keys(payload.values).length, 63);
+  assert.strictEqual(Object.keys(payload.values).length, 69);
   assert.strictEqual(payload.values.sound, 'Alarm03.wav');
   assert.strictEqual(payload.values.popupStyle, 'topmost');
   // 默认只提醒「裁决 / 确认计划 / 任务完成 / 本轮报错」；「每轮结束」「本轮中断」默认关闭。
@@ -120,6 +122,14 @@ let snapshot;
   assert.strictEqual(payload.values.alertAwaitingTest, true);
   // 「需要重启 DSH」提醒默认开。
   assert.strictEqual(payload.values.alertRestart, true);
+  // 严格输出协议默认开（只认正文里的 [[ALARM:…]] 标签）。
+  assert.strictEqual(payload.values.protocolMode, true);
+  // 「Agent 停下来且没有后续动作」默认开；与其它轻事件一样默认不弹窗。
+  assert.strictEqual(payload.values.alertStalled, true);
+  assert.strictEqual(payload.values.soundStalled, true);
+  assert.strictEqual(payload.values.voiceStalled, true);
+  assert.strictEqual(payload.values.popupStalled, false);
+  assert.strictEqual(payload.values.voiceTextStalled, '我停下来了，没有后续动作');
   // 「待人工测试」的批次/聚合规则默认值（缺省 = 旧行为：每个任务各自提醒、不聚合）。
   assert.strictEqual(payload.values.awaitingTestScope, 'all');
   assert.strictEqual(payload.values.awaitingTestAnchor, '批次');
@@ -150,6 +160,7 @@ let snapshot;
     'TurnEnd',
     'TurnInterrupt',
     'TurnError',
+    'Stalled',
     'Test',
   ]) {
     assert.strictEqual(typeof payload.values[`popup${kind}`], 'boolean', `缺 popup${kind}`);
@@ -160,7 +171,7 @@ let snapshot;
   for (const kind of ['Ask', 'Plan', 'TaskComplete', 'AwaitingTest', 'Test']) {
     assert.strictEqual(payload.values[`popup${kind}`], true, `popup${kind} 默认应为 true`);
   }
-  for (const kind of ['Restart', 'TurnEnd', 'TurnInterrupt', 'TurnError']) {
+  for (const kind of ['Restart', 'TurnEnd', 'TurnInterrupt', 'TurnError', 'Stalled']) {
     assert.strictEqual(payload.values[`popup${kind}`], false, `popup${kind} 默认应为 false`);
   }
   // 三个通道总开关默认开启。
@@ -266,13 +277,60 @@ function firstTextBlock(markdown) {
   );
   // 字符数相同还不够（等长不同文也算过）：正文必须逐字相同，前端才能「一键复制」。
   assert.strictEqual(payload.text, expected, '规则块正文须与文档第一个 text 围栏逐字一致');
-  // 围栏截断的反证：R1 那句里的行内 ``` 之后还有 R2~R11，被按字符位置截就会全丢。
-  assert.ok(payload.text.startsWith('【报警提醒输出约束】'), '规则块应从「【报警提醒输出约束】」开始');
-  assert.ok(payload.text.includes('R11 交付口径'), '规则块被行内 ``` 截断了（少了 R11 及其后内容）');
+  // 围栏截断的反证：R0 那句里的行内 ``` 之后还有 R1~R5，被按字符位置截就会全丢。
+  assert.ok(payload.text.startsWith('【报警提醒输出协议】'), '规则块应从「【报警提醒输出协议】」开始');
+  assert.ok(payload.text.includes('R5 收尾自检'), '规则块被行内 ``` 截断了（少了 R5 及其后内容）');
   console.log(
-    'GET agent-rules ok: %d 字符（= docs 第一个 text 围栏）、missing=false、含 R11',
+    'GET agent-rules ok: %d 字符（= docs 第一个 text 围栏）、missing=false、含 R5',
     payload.text.length,
   );
+}
+
+// ---------------- lib/alarm.js：parseAlarmTags（严格输出协议） ----------------
+{
+  const { parseAlarmTags } = await import(`file:///${SRC}/lib/alarm.js`);
+  /** 只有「独占一行 + 大写 kind + 双中括号」才算；每轮可以有多条标签。 */
+  const cases = [
+    { id: 'ask', text: '好的，我停在这里。\n[[ALARM:ASK]]', expect: [{ kind: 'ASK', taskName: '' }] },
+    { id: 'plan', text: '[[ALARM:PLAN]]', expect: [{ kind: 'PLAN', taskName: '' }] },
+    { id: 'done', text: '跑完了。\n\n  [[ALARM:DONE]]  \n', expect: [{ kind: 'DONE', taskName: '' }] },
+    { id: 'restart', text: '改完了。\n[[ALARM:RESTART]]\n', expect: [{ kind: 'RESTART', taskName: '' }] },
+    { id: 'stalled', text: '[[ALARM:STALLED]]', expect: [{ kind: 'STALLED', taskName: '' }] },
+    {
+      id: 'test-with-name',
+      text: 'TP-7 到了。\n[[ALARM:TEST:TP-7-批量测试协调]]',
+      expect: [{ kind: 'TEST', taskName: 'TP-7-批量测试协调' }],
+    },
+    // TEST 的任务名可为空串（`[[ALARM:TEST:]]` / `[[ALARM:TEST]]` 都算）。
+    { id: 'test-empty-name', text: '[[ALARM:TEST:  ]]', expect: [{ kind: 'TEST', taskName: '' }] },
+    { id: 'test-bare', text: '[[ALARM:TEST]]', expect: [{ kind: 'TEST', taskName: '' }] },
+    // 行内出现不算（必须独占一行）。
+    {
+      id: 'inline-no-match',
+      text: '我只认 [[ALARM:RESTART]] 这个标签，但它写在句子中间。',
+      expect: [],
+    },
+    // 大小写错误不算（区分大小写）。
+    { id: 'lowercase-no-match', text: '[[alarm:restart]]', expect: [] },
+    { id: 'mixedcase-no-match', text: '[[Alarm:Test:TP-1]]', expect: [] },
+    // 一轮里多条 → 按出现顺序全部返回。
+    {
+      id: 'multi',
+      text: '[[ALARM:DONE]]\n[[ALARM:TEST:TP-1]]\n[[ALARM:STALLED]]',
+      expect: [
+        { kind: 'DONE', taskName: '' },
+        { kind: 'TEST', taskName: 'TP-1' },
+        { kind: 'STALLED', taskName: '' },
+      ],
+    },
+    // 纯函数、不抛：非字符串入参一律空数组。
+    { id: 'non-string', text: undefined, expect: [] },
+  ];
+  for (const item of cases) {
+    const got = parseAlarmTags(item.text);
+    assert.deepStrictEqual(got, item.expect, `parseAlarmTags 用例 ${item.id} 不符：${JSON.stringify(got)}`);
+  }
+  console.log('parseAlarmTags ok: %d 组用例（6 个标签 + 行内/大小写/空任务名/多条/非字符串）', cases.length);
 }
 
 // ---------------- POST /test：默认跳过（这一段会真的响铃/弹窗） ----------------
@@ -337,6 +395,16 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
     },
   };
   const source = readFileSync(`${SRC}/client.js`, 'utf8');
+  // 条件表行数 = 10（每行一个 `alert: 'alertXxx',`）。新增/删除条件行时这里必须同步；
+  // 新条件（Agent 停下来且没有后续动作）必须排在「本轮报错」之后、「手工测试」之前。
+  const conditionRows = (source.match(/^\t+alert: 'alert[A-Za-z]+',$/gmu) ?? []).length;
+  assert.strictEqual(conditionRows, 10, `条件表应有 10 行，实际 ${conditionRows}`);
+  const stalledRowAt = source.indexOf("alert: 'alertStalled',");
+  assert.ok(stalledRowAt > 0, 'client.js 缺「Agent 停下来且没有后续动作」条件行');
+  assert.ok(
+    source.indexOf("alert: 'alertTurnError',") < stalledRowAt && stalledRowAt < source.indexOf("alert: 'alertTest',"),
+    '新条件行应排在「本轮报错」之后、「手工测试」之前',
+  );
   // 客户端 bundle 在浏览器里是 <script> 直接执行，这里用同样的方式跑。
   new Function('window', 'fetch', 'Headers', source)(globalThis.window, () => {}, class Headers {});
   assert.ok(factory, 'client.js 没有调用 __ModuleLoader__.load');

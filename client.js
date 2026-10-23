@@ -296,6 +296,15 @@ window.__ModuleLoader__.load({
 						help: '默认打开。',
 					},
 					{
+						kind: 'stalled',
+						alert: 'alertStalled',
+						popup: 'popupStalled',
+						sound: 'soundStalled',
+						voice: 'voiceStalled',
+						label: 'Agent 停下来且没有后续动作',
+						help: '一轮正常结束、但没调用任何工具也没请你裁决时提醒；默认开启。',
+					},
+					{
 						kind: 'test',
 						alert: 'alertTest',
 						popup: 'popupTest',
@@ -309,8 +318,14 @@ window.__ModuleLoader__.load({
 			{
 				id: 'batch',
 				title: '批量测试协调',
-				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。',
+				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。严格协议模式下，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒。',
 				fields: [
+					{
+						key: 'protocolMode',
+						type: 'bool',
+						label: '严格协议模式（只认标签）',
+						help: '开启后「需要重启 DSH」只认 [[ALARM:RESTART]]、「任务到待人工测试」只认 [[ALARM:TEST:任务名]] 标签；关闭则兼容旧判定（正文措辞 + 状态文件相位）。默认开启。',
+					},
 					{
 						key: 'awaitingTestScope',
 						type: 'select',
@@ -320,13 +335,13 @@ window.__ModuleLoader__.load({
 							{ value: 'anchor', label: '只提醒路径含锚点的那个状态文件' },
 						],
 						fallback: 'all',
-						help: '全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件（配合合并测试批次）',
+						help: '仅旧模式生效：严格协议模式下待测只认 [[ALARM:TEST:任务名]] 标签。全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件。',
 					},
 					{
 						key: 'awaitingTestAnchor',
 						type: 'text',
 						label: '批次锚点关键词',
-						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2',
+						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2。严格协议模式下不生效。',
 					},
 					{
 						key: 'awaitingTestQuietSeconds',
@@ -370,6 +385,7 @@ window.__ModuleLoader__.load({
 					{ key: 'voiceTextTurnEnd', type: 'text', label: '「每一轮结束」播报文本', help: VOICE_TEXT_HELP, wide: true },
 					{ key: 'voiceTextInterrupt', type: 'text', label: '「本轮中断」播报文本', help: VOICE_TEXT_HELP, wide: true },
 					{ key: 'voiceTextError', type: 'text', label: '「本轮报错」播报文本', help: VOICE_TEXT_HELP, wide: true },
+					{ key: 'voiceTextStalled', type: 'text', label: '「Agent 停下来」播报文本', help: VOICE_TEXT_HELP, wide: true },
 					{ key: 'voiceTextAwaitingTest', type: 'text', label: '「任务到待人工测试」播报文本', help: VOICE_TEXT_HELP, wide: true },
 					{ key: 'voiceTextRestart', type: 'text', label: '「需要重启 DSH」播报文本', help: VOICE_TEXT_HELP, wide: true },
 					{ key: 'voiceTextTest', type: 'text', label: '「手工测试提醒」播报文本', help: VOICE_TEXT_HELP, wide: true },
@@ -673,7 +689,7 @@ window.__ModuleLoader__.load({
 		function ConditionRowBody(props) {
 			const { row, values, onChange, onAudition, busy } = props;
 			// 复选框的可访问名称用整条标签（「弹窗：全部任务完成（任务级完成，不是每轮结束）」），
-			// 九个条件的提醒勾选框读起来仍能区分开。
+			// 十个条件的提醒勾选框读起来仍能区分开。
 			const name = auditionLabel(row);
 			const cells = [];
 			for (const column of CONDITION_COLUMNS) {
@@ -1655,6 +1671,9 @@ window.__ModuleLoader__.load({
 							maxWidth: '900px',
 							width: 'calc(100vw - 48px)',
 							maxHeight: '86vh',
+							// 至少 60vh 高：卡片高度**不再随内容塌陷**（原先规则块一长就只看得到
+							// 前两行，用户以为「规则没导入」）。正文 textarea 用 flex 撑满剩下的高度。
+							minHeight: '60vh',
 							overflow: 'hidden',
 							display: 'flex',
 							flexDirection: 'column',
@@ -1682,8 +1701,18 @@ window.__ModuleLoader__.load({
 						},
 						h(
 							'span',
-							{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text, marginRight: 'auto' } },
+							{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text } },
 							'编辑报警规则',
+						),
+						// 标题右侧一行小字：字符数。规则块很长时给出「确实拿到了全文」的证据
+						// （用户就是把塌陷出来的两行误判成「没导入」）；正文为空时显示 —。
+						h(
+							'span',
+							{
+								style: { fontSize: 11.5, color: COLORS.sub, marginRight: 'auto' },
+								'aria-label': text === '' ? '规则正文为空' : `规则正文共 ${text.length} 字符`,
+							},
+							text === '' ? '—' : `共 ${text.length} 字符`,
 						),
 						h(
 							'button',
@@ -1711,7 +1740,9 @@ window.__ModuleLoader__.load({
 						),
 					),
 					hints.length > 0 ? h('div', { style: { flex: '0 0 auto' } }, hints) : null,
-					// 正文：只读 textarea（可纵向拉伸；规则块里的换行原样保留）。
+					// 正文：只读 textarea（规则块里的换行原样保留）。
+					// `flex:'1 1 auto' + minHeight:0` 让它撑满卡片剩余高度（卡片本身 minHeight 60vh），
+					// `resize:'none'` 关掉手动拖拽——高度由 flex 决定，再拖就会顶破卡片。
 					h('textarea', {
 						ref: textareaRef,
 						readOnly: true,
@@ -1723,7 +1754,7 @@ window.__ModuleLoader__.load({
 							minHeight: 0,
 							width: '100%',
 							boxSizing: 'border-box',
-							resize: 'vertical',
+							resize: 'none',
 							fontFamily: 'ui-monospace,Consolas,monospace',
 							fontSize: 12.5,
 							lineHeight: '18px',
