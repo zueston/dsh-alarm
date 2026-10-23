@@ -177,18 +177,23 @@
   }
 
   .thead {
+    display: grid;
+    /* 表头两行：第一行只放四个通道总开关，第二行是全部文字标签（条件 / 提醒 / 弹窗 / 铃声 / 语音播报 / 播报文本） */
+    grid-template-rows: auto auto;
+    row-gap: 6px;
+    column-gap: 10px;
+    align-items: center;
     padding: 10px 0 6px;
     border-bottom: 1px solid var(--line);
     font-size: 11.5px;
     color: var(--label-2);
     line-height: 16px;
     text-align: center;
-    /* 条件 / 播报文本 与 四个总开关标签同处一行，垂直居中对齐 */
-    align-items: center;
   }
+  .thead .th-switch { display: flex; justify-content: center; }
   .thead .th-label { text-align: left; }
   .thead .th-voice { text-align: left; }
-  .thead .th-master { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .thead .th-master { text-align: center; }
 
   .trow { padding: 9px 0; border-bottom: 1px solid var(--line); }
   .trow:last-child { border-bottom: 0; }
@@ -324,12 +329,22 @@
 
       <div class="table">
         <div class="thead">
+          <!-- 第一行：只有四个通道总开关 -->
+          <span></span>
+          <span></span>
+          <label class="switch th-switch"><input type="checkbox" checked /><span class="track"></span></label>
+          <label class="switch th-switch"><input type="checkbox" checked /><span class="track"></span></label>
+          <label class="switch th-switch"><input type="checkbox" checked /><span class="track"></span></label>
+          <label class="switch th-switch"><input type="checkbox" checked /><span class="track"></span></label>
+          <span></span>
+
+          <!-- 第二行：全部文字标签同一行同一基线 -->
           <span></span>
           <span class="th-label">条件</span>
-          <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>提醒</span>
-          <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>弹窗</span>
-          <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>铃声</span>
-          <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>语音播报</span>
+          <span class="th-master">提醒</span>
+          <span class="th-master">弹窗</span>
+          <span class="th-master">铃声</span>
+          <span class="th-master">语音播报</span>
           <span class="th-voice">播报文本</span>
         </div>
         <div id="rows"></div>
