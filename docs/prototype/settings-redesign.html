@@ -40,9 +40,8 @@
     color: var(--label);
   }
 
-  /* ---------- 弹窗外壳 ---------- */
   .dialog {
-    width: min(860px, 100%);
+    width: min(1040px, 100%);
     max-height: 92vh;
     display: flex;
     flex-direction: column;
@@ -61,20 +60,9 @@
     border-bottom: 1px solid var(--line);
   }
 
-  .head-title {
-    font-size: 15.5px;
-    font-weight: 600;
-    letter-spacing: .2px;
-    white-space: nowrap;
-  }
+  .head-title { font-size: 15.5px; font-weight: 600; letter-spacing: .2px; white-space: nowrap; }
 
-  /* 注册范围：三枚胶囊勾选 */
-  .slots {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: 2px;
-  }
+  .slots { display: inline-flex; align-items: center; gap: 6px; margin-left: 2px; }
 
   .slot {
     display: inline-flex;
@@ -94,207 +82,99 @@
   }
 
   .slot:hover { border-color: var(--line-strong); color: var(--label); }
-
   .slot input { display: none; }
 
   .slot .dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
+    width: 12px; height: 12px; border-radius: 999px;
     border: 1.5px solid var(--line-strong);
-    background: transparent;
-    display: inline-block;
-    position: relative;
+    display: inline-block; position: relative;
     transition: background .18s, border-color .18s;
   }
 
   .slot input:checked + .dot { background: var(--brand); border-color: var(--brand); }
-  .slot input:checked + .dot::after {
-    content: "";
-    position: absolute;
-    inset: 3px;
-    border-radius: 999px;
-    background: #fff;
-  }
-  .slot input:checked ~ .slot-label { color: var(--label); }
+  .slot input:checked + .dot::after { content: ""; position: absolute; inset: 3px; border-radius: 999px; background: #fff; }
   .slot:has(input:checked) { background: rgba(77, 107, 254, .10); border-color: rgba(77, 107, 254, .38); }
+  .slot:has(input:checked) .slot-label { color: var(--label); }
 
   .head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
-  /* ---------- 按钮 ---------- */
   .btn {
-    font: inherit;
-    font-size: 12.5px;
-    font-weight: 600;
-    line-height: 1;
-    padding: 8px 14px;
-    border-radius: var(--radius-s);
-    border: 1px solid var(--line);
-    background: var(--fill);
-    color: var(--label);
-    cursor: pointer;
-    white-space: nowrap;
+    font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1;
+    padding: 8px 14px; border-radius: var(--radius-s);
+    border: 1px solid var(--line); background: var(--fill); color: var(--label);
+    cursor: pointer; white-space: nowrap;
     transition: background .18s, border-color .18s, color .18s, transform .06s;
   }
   .btn:hover { background: var(--fill-2); border-color: var(--line-strong); }
   .btn:active { transform: translateY(1px); }
   .btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
-
-  .btn-primary {
-    background: var(--brand);
-    border-color: var(--brand);
-    color: #fff;
-  }
+  .btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
   .btn-primary:hover { background: #3f5cf0; border-color: #3f5cf0; }
-
-  .btn-amber {
-    background: var(--amber-bg);
-    border-color: var(--amber-line);
-    color: var(--amber);
-  }
+  .btn-amber { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); }
   .btn-amber:hover { background: rgba(245, 158, 11, .30); }
 
-  .btn-danger {
-    background: var(--danger-bg);
-    border-color: var(--danger-line);
-    color: var(--danger);
-  }
-
   .icon-btn {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
     border-radius: var(--radius-s);
-    border: 1px solid var(--danger-line);
-    background: var(--danger-bg);
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 15px;
-    line-height: 1;
+    border: 1px solid var(--danger-line); background: var(--danger-bg);
+    color: var(--danger); cursor: pointer; font-size: 15px; line-height: 1;
   }
   .icon-btn:hover { background: rgba(220, 38, 38, .16); }
 
-  /* ---------- 内容区 ---------- */
-  .body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 12px 16px 18px;
-  }
+  .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; }
 
-  .section { margin-top: 14px; }
+  .section { margin-top: 16px; }
   .section:first-child { margin-top: 4px; }
 
-  .section-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 8px;
-  }
-
+  .section-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
   .section-title { font-size: 13px; font-weight: 600; }
   .section-desc { font-size: 12px; line-height: 18px; color: var(--label-2); margin: 0 0 10px; }
 
-  .card {
-    padding: 10px 12px 12px;
-    border-radius: var(--radius-m);
-    border: 1px solid var(--line);
-    background: var(--fill);
-  }
+  .card { padding: 10px 12px 12px; border-radius: var(--radius-m); border: 1px solid var(--line); background: var(--fill); }
 
-  /* ---------- 分段控件（协议模式） ---------- */
-  .segmented {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    padding: 2px;
-    border-radius: 999px;
-    background: var(--fill-2);
-  }
-
+  /* 分段控件 */
+  .segmented { position: relative; display: inline-flex; align-items: center; padding: 2px; border-radius: 999px; background: var(--fill-2); }
   .segmented .thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    height: calc(100% - 4px);
-    border-radius: 999px;
-    background: var(--brand);
+    position: absolute; top: 2px; left: 2px; height: calc(100% - 4px);
+    border-radius: 999px; background: var(--brand);
     box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
     transition: transform .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1);
   }
-
   .segmented .opt {
-    position: relative;
-    z-index: 1;
-    padding: 6px 14px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 1;
-    color: var(--label-2);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: color .18s;
-    white-space: nowrap;
+    position: relative; z-index: 1; padding: 6px 14px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; line-height: 1; color: var(--label-2);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    transition: color .18s; white-space: nowrap;
   }
-
   .segmented .opt[data-selected="true"] { color: #fff; }
   .segmented .opt[data-selected="false"]:hover { color: var(--brand); }
 
-  /* ? 气泡 */
   .tip { position: relative; display: inline-flex; }
-
   .tip-badge {
-    width: 15px;
-    height: 15px;
-    border-radius: 999px;
-    border: 1px solid currentColor;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-    cursor: pointer;
-    opacity: .8;
+    width: 15px; height: 15px; border-radius: 999px; border: 1px solid currentColor;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; opacity: .8;
   }
-
   .tip-badge:hover { opacity: 1; }
-
   .tip-bubble {
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    width: 340px;
-    padding: 10px 12px;
-    border-radius: var(--radius-m);
-    border: 1px solid var(--line);
-    background: var(--surface);
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    width: 340px; padding: 10px 12px; border-radius: var(--radius-m);
+    border: 1px solid var(--line); background: var(--surface);
     box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
-    font-size: 12.5px;
-    line-height: 18px;
-    color: var(--label);
-    white-space: pre-line;
-    display: none;
-    z-index: 5;
+    font-size: 12.5px; line-height: 18px; color: var(--label);
+    white-space: pre-line; display: none; z-index: 5;
   }
-
   .tip[data-open="true"] .tip-bubble { display: block; }
 
-  /* ---------- 条件表 ---------- */
+  /* 条件表：▶ | 条件 | 4 通道 | 播报文本 */
   .table { border-top: 1px solid var(--line); }
 
   .thead,
   .trow {
     display: grid;
-    grid-template-columns: 44px minmax(180px, 1fr) repeat(4, 64px);
-    gap: 12px;
+    grid-template-columns: 40px minmax(150px, 1fr) repeat(4, 54px) minmax(180px, 250px);
+    gap: 10px;
     align-items: start;
   }
 
@@ -306,36 +186,18 @@
     line-height: 16px;
     text-align: center;
   }
-
   .thead .th-label { text-align: left; }
+  .thead .th-voice { text-align: left; }
+  .thead .th-master { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 
-  .thead .th-master {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-  }
-
-  .trow {
-    padding: 9px 0;
-    border-bottom: 1px solid var(--line);
-  }
-
+  .trow { padding: 9px 0; border-bottom: 1px solid var(--line); }
   .trow:last-child { border-bottom: 0; }
 
   .play {
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-s);
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--label-2);
-    cursor: pointer;
-    font-size: 11px;
-    line-height: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    width: 28px; height: 28px; border-radius: var(--radius-s);
+    border: 1px solid var(--line); background: var(--surface); color: var(--label-2);
+    cursor: pointer; font-size: 11px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
     transition: color .18s, border-color .18s, background .18s;
   }
   .play:hover { color: var(--brand); border-color: rgba(77, 107, 254, .5); background: rgba(77, 107, 254, .08); }
@@ -343,39 +205,33 @@
   .row-name { font-size: 13px; line-height: 20px; }
   .row-help { display: block; margin-top: 2px; font-size: 11.5px; line-height: 16px; color: var(--label-2); }
 
-  /* 开关 */
   .switch { display: flex; justify-content: center; padding-top: 2px; }
-
   .switch input { display: none; }
-
   .switch .track {
-    width: 34px;
-    height: 20px;
-    border-radius: 999px;
-    background: rgba(128, 128, 128, .28);
-    position: relative;
-    cursor: pointer;
+    width: 34px; height: 20px; border-radius: 999px;
+    background: rgba(128, 128, 128, .28); position: relative; cursor: pointer;
     transition: background .18s;
   }
-
   .switch .track::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    background: #fff;
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 999px; background: #fff;
     box-shadow: 0 1px 2px rgba(0, 0, 0, .22);
     transition: transform .18s;
   }
-
   .switch input:checked + .track { background: var(--brand); }
   .switch input:checked + .track::after { transform: translateX(14px); }
   .switch input:focus-visible + .track { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .switch input:disabled + .track { opacity: .45; cursor: not-allowed; }
 
-  /* ---------- 字段行 ---------- */
+  .voice-input {
+    font: inherit; font-size: 12px; width: 100%;
+    padding: 6px 8px; border-radius: var(--radius-s);
+    border: 1px solid var(--line); background: var(--surface); color: var(--label);
+    transition: border-color .18s, box-shadow .18s, opacity .18s;
+  }
+  .voice-input:focus { outline: none; border-color: rgba(77, 107, 254, .6); box-shadow: 0 0 0 3px rgba(77, 107, 254, .14); }
+  .voice-input:disabled { opacity: .45; }
+
   .field {
     display: grid;
     grid-template-columns: 220px minmax(0, 1fr);
@@ -384,70 +240,39 @@
     padding: 10px 0;
     border-top: 1px solid var(--line);
   }
-
   .field:first-of-type { border-top: 0; }
-
   .field-label { font-size: 13px; line-height: 20px; }
   .field-help { display: block; margin-top: 3px; font-size: 11.5px; line-height: 16px; color: var(--label-2); }
 
-  .input,
-  .select,
-  .textarea {
-    font: inherit;
-    font-size: 12.5px;
-    width: 100%;
-    padding: 7px 10px;
-    border-radius: var(--radius-s);
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--label);
+  .input, .select, .textarea {
+    font: inherit; font-size: 12.5px; width: 100%;
+    padding: 7px 10px; border-radius: var(--radius-s);
+    border: 1px solid var(--line); background: var(--surface); color: var(--label);
     transition: border-color .18s, box-shadow .18s;
   }
-
-  .input:focus,
-  .select:focus,
-  .textarea:focus {
-    outline: none;
-    border-color: rgba(77, 107, 254, .6);
-    box-shadow: 0 0 0 3px rgba(77, 107, 254, .14);
+  .input:focus, .select:focus, .textarea:focus {
+    outline: none; border-color: rgba(77, 107, 254, .6); box-shadow: 0 0 0 3px rgba(77, 107, 254, .14);
   }
-
   .textarea { min-height: 60px; resize: vertical; line-height: 18px; }
 
   .num-row { display: flex; align-items: center; gap: 8px; }
   .num-row .input { width: 110px; }
   .unit { font-size: 12px; color: var(--label-2); }
 
-  .hint { font-size: 12px; line-height: 18px; color: var(--label-2); }
-
-  .status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #1a7f37;
-  }
-
-  .status .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
-
   .foot {
     flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px 14px;
-    border-top: 1px solid var(--line);
-    font-size: 12px;
-    color: var(--label-2);
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px 14px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--label-2);
   }
-
   .foot .spacer { flex: 1 1 auto; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #1a7f37; }
+  .status .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 </style>
 </head>
 <body>
 
 <div class="dialog" role="dialog" aria-modal="true" aria-label="报警提醒">
-  <!-- 标题行 -->
   <div class="head">
     <span class="head-title">报警提醒</span>
 
@@ -466,13 +291,10 @@
     </div>
   </div>
 
-  <!-- 内容 -->
   <div class="body">
 
     <div class="section">
-      <div class="section-head">
-        <span class="section-title">协议模式</span>
-      </div>
+      <div class="section-head"><span class="section-title">协议模式</span></div>
       <div class="card">
         <div class="segmented" id="protocolSeg">
           <span class="thumb" id="protocolThumb"></span>
@@ -493,11 +315,10 @@
     </div>
 
     <div class="section">
-      <div class="section-head">
-        <span class="section-title">什么时候提醒</span>
-      </div>
+      <div class="section-head"><span class="section-title">什么时候提醒</span></div>
       <p class="section-desc">
         一行一个条件：勾「提醒」表示这个条件会提醒，右边三列决定它用哪几条通道。表头那行是四条通道的总开关，关掉后所有条件都不走这条通道。
+        最后一列是该条件触发时的**播报文本**（留空即用默认，灰字就是默认值）。
       </p>
 
       <div class="table">
@@ -508,123 +329,17 @@
           <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>弹窗</span>
           <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>铃声</span>
           <span class="th-master"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label>语音播报</span>
+          <span class="th-voice">播报文本</span>
         </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：需要你裁决">▶</button>
-          <div class="row-name">需要你裁决（ask_user_question）</div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：需要你确认计划">▶</button>
-          <div class="row-name">需要你确认计划（exit_plan_mode）</div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：全部任务完成">▶</button>
-          <div class="row-name">
-            全部任务完成（任务级完成，不是每轮结束）
-            <span class="row-help">只在 agent 调用 update_goal（action=complete）时响；普通轮次结束不会响。</span>
-          </div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：需要重启 DSH">▶</button>
-          <div class="row-name">
-            需要重启 DSH
-            <span class="row-help">严格模式下只认 [[ALARM:RESTART]] 标签；默认模式下正文提到「要重启 DSH」也会提醒。</span>
-          </div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：任务到待人工测试">▶</button>
-          <div class="row-name">
-            任务到「待人工测试」
-            <span class="row-help">默认模式下按状态文件的真实相位变化识别；严格模式下只认 [[ALARM:TEST:任务名]] 标签。</span>
-          </div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：每一轮结束">▶</button>
-          <div class="row-name">
-            每一轮结束都提醒
-            <span class="row-help">默认关闭；勾选后每轮跑完都响一次。默认不弹窗，避免每轮都打断。</span>
-          </div>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：本轮中断">▶</button>
-          <div class="row-name">本轮中断时提醒（手动打断）<span class="row-help">默认关闭。</span></div>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：本轮报错">▶</button>
-          <div class="row-name">本轮报错时提醒（异常结束）<span class="row-help">默认打开。</span></div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：Agent 停下来">▶</button>
-          <div class="row-name">
-            Agent 停下来且没有后续动作
-            <span class="row-help">一轮正常结束、但没调用任何工具也没请你裁决时提醒；默认开启。</span>
-          </div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
-
-        <div class="trow">
-          <button class="play" aria-label="试听：手工测试">▶</button>
-          <div class="row-name">手工测试提醒<span class="row-help">默认开启；取消后这一行的 ▶ 试听也不会响。</span></div>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-          <label class="switch"><input type="checkbox" checked /><span class="track"></span></label>
-        </div>
+        <div id="rows"></div>
       </div>
     </div>
 
     <div class="section">
-      <div class="section-head">
-        <span class="section-title">批量测试协调</span>
-      </div>
+      <div class="section-head"><span class="section-title">批量测试协调</span></div>
       <p class="section-desc">
         多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。严格协议模式下，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒。
       </p>
-
       <div class="card">
         <div class="field">
           <div>
@@ -636,7 +351,6 @@
             <option>只提醒路径含锚点的那个状态文件</option>
           </select>
         </div>
-
         <div class="field">
           <div>
             <div class="field-label">批次锚点关键词</div>
@@ -644,7 +358,6 @@
           </div>
           <input class="input" value="批次" />
         </div>
-
         <div class="field">
           <div>
             <div class="field-label">待测提醒聚合窗口（秒）</div>
@@ -652,7 +365,6 @@
           </div>
           <div class="num-row"><input class="input" type="number" value="0" /><span class="unit">秒</span></div>
         </div>
-
         <div class="field">
           <div>
             <div class="field-label">汇总附待测清单</div>
@@ -664,18 +376,8 @@
     </div>
 
     <div class="section">
-      <div class="section-head">
-        <span class="section-title">语音播报（TTS）</span>
-      </div>
+      <div class="section-head"><span class="section-title">语音播报（TTS）</span></div>
       <div class="card">
-        <div class="field">
-          <div>
-            <div class="field-label">「需要你裁决」播报文本</div>
-            <span class="field-help">由条件表表头的语音播报总开关决定。</span>
-          </div>
-          <textarea class="textarea">需要你裁决</textarea>
-        </div>
-
         <div class="field">
           <div>
             <div class="field-label">语音</div>
@@ -686,13 +388,30 @@
             <option>zh-CN-XiaoyiNeural（需联网）</option>
           </select>
         </div>
+        <div class="field">
+          <div>
+            <div class="field-label">兜底文本</div>
+            <span class="field-help">某个条件没填播报文本时用这一句。</span>
+          </div>
+          <input class="input" value="报警提醒" />
+        </div>
+        <div class="field">
+          <div>
+            <div class="field-label">语速 / 音量</div>
+            <span class="field-help">0 = 系统默认。</span>
+          </div>
+          <div class="num-row">
+            <input class="input" type="number" value="0" placeholder="语速" />
+            <span class="unit">语速</span>
+            <input class="input" type="number" value="100" />
+            <span class="unit">音量</span>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="section">
-      <div class="section-head">
-        <span class="section-title">节流</span>
-      </div>
+      <div class="section-head"><span class="section-title">节流</span></div>
       <div class="card">
         <div class="field">
           <div>
@@ -701,7 +420,6 @@
           </div>
           <div class="num-row"><input class="input" type="number" value="4" /><span class="unit">秒</span></div>
         </div>
-
         <div class="field">
           <div>
             <div class="field-label">裁决后忽略「结束」提醒的时长</div>
@@ -722,7 +440,31 @@
 </div>
 
 <script>
-  // 分段控件：滑块跟随选中项
+  // ---- 条件行数据（原型用；真实实现里来自 SECTIONS） ----
+  const rows = [
+    { label: '需要你裁决（ask_user_question）', voice: '需要你裁决', on: [true, true, true, true] },
+    { label: '需要你确认计划（exit_plan_mode）', voice: '需要你确认计划', on: [true, true, true, true] },
+    { label: '全部任务完成（任务级完成，不是每轮结束）', help: '只在 agent 调用 update_goal（action=complete）时响；普通轮次结束不会响。', voice: '全部任务完成', on: [true, true, true, true] },
+    { label: '需要重启 DSH', help: '严格模式下只认 [[ALARM:RESTART]] 标签；默认模式下正文提到「要重启 DSH」也会提醒。', voice: '需要重启 DSH', on: [true, true, true, true] },
+    { label: '任务到「待人工测试」', help: '默认模式下按状态文件的真实相位变化识别；严格模式下只认 [[ALARM:TEST:任务名]] 标签。', voice: '需要你手工测试', on: [true, true, true, true] },
+    { label: '每一轮结束都提醒', help: '默认关闭；勾选后每轮跑完都响一次。默认不弹窗，避免每轮都打断。', voice: '本轮结束', on: [false, false, false, false] },
+    { label: '本轮中断时提醒（手动打断）', help: '默认关闭。', voice: '本轮中断', on: [false, false, false, false] },
+    { label: '本轮报错时提醒（异常结束）', help: '默认打开。', voice: '本轮报错', on: [true, true, true, true] },
+    { label: 'Agent 停下来且没有后续动作', help: '一轮正常结束、但没调用任何工具也没请你裁决时提醒；默认开启。', voice: '我停下来了，没有后续动作', on: [true, false, true, true] },
+    { label: '手工测试提醒', help: '默认开启；取消后这一行的 ▶ 试听也不会响。', voice: '这是语音测试示例', on: [true, true, true, true] },
+  ];
+
+  const host = document.getElementById('rows');
+  host.innerHTML = rows.map((row) => `
+    <div class="trow">
+      <button class="play" aria-label="试听：${row.label}">▶</button>
+      <div class="row-name">${row.label}${row.help ? `<span class="row-help">${row.help}</span>` : ''}</div>
+      ${row.on.map((checked) => `<label class="switch"><input type="checkbox"${checked ? ' checked' : ''} /><span class="track"></span></label>`).join('')}
+      <input class="voice-input" value="${row.voice}" placeholder="留空用兜底文本" />
+    </div>
+  `).join('');
+
+  // 分段滑块
   const seg = document.getElementById('protocolSeg');
   const thumb = document.getElementById('protocolThumb');
 
@@ -734,7 +476,6 @@
   }
 
   seg.querySelectorAll('.opt').forEach((opt) => {
-    // 点「?」不切换模式
     opt.addEventListener('click', (event) => {
       if (event.target.closest('.tip')) return;
       seg.querySelectorAll('.opt').forEach((node) => node.setAttribute('data-selected', 'false'));
@@ -749,19 +490,15 @@
     event.stopPropagation();
     tip.setAttribute('data-open', tip.getAttribute('data-open') === 'true' ? 'false' : 'true');
   });
-
   document.addEventListener('click', (event) => {
     if (!event.target.closest('#strictTip')) tip.setAttribute('data-open', 'false');
   });
 
-  // 只剩一个注册范围时，不允许再取消
+  // 注册范围至少留一个
   const slots = [...document.querySelectorAll('.slot input')];
   slots.forEach((input) => {
     input.addEventListener('change', () => {
-      const checked = slots.filter((node) => node.checked);
-      if (checked.length === 0) {
-        input.checked = true;
-      }
+      if (slots.filter((node) => node.checked).length === 0) input.checked = true;
     });
   });
 
