@@ -48,6 +48,11 @@ const NS = DSH_ALARM_SETTINGS_NS;
 /** 字段规格（与 host/config.js 一一对应）。 */
 const FIELDS = {
 	enabled: { kind: "bool", def: true },
+	// 这张设置卡片注册/显示在哪里（三个空间各一个扁平 bool）：
+	// 主窗口（侧栏铃铛 + 设置浮层）默认开；插件页 / 设置页默认关（首次使用只有主窗口）。
+	showInMain: { kind: "bool", def: true },
+	showInPlugins: { kind: "bool", def: false },
+	showInSettings: { kind: "bool", def: false },
 	alertAsk: { kind: "bool", def: true },
 	alertPlan: { kind: "bool", def: true },
 	alertTaskComplete: { kind: "bool", def: true },
@@ -125,14 +130,15 @@ const FIELDS = {
 	awaitingTestAnchor: { kind: "string", def: "批次" },
 	awaitingTestQuietSeconds: { kind: "number", def: 0, min: 0, max: 86_400 },
 	awaitingTestSummary: { kind: "bool", def: true },
-	// 严格输出协议（三态）：tag-first=标签优先 + 旧判定兜底（默认）/ tag-only=只认标签 /
-	// heuristic-only=只用旧判定。aliases 兼容**旧布尔配置**（老配置里存的是 true/false）：
-	// 读入时静默改写（true → tag-first、false → heuristic-only），不报错。
+	// 严格输出协议（**两态**）：tag-first=默认模式（标签优先 + 旧判定兜底）/ tag-only=严格模式（只认标签）。
+	// aliases 兼容历史值——布尔 true/false（1.3.x）与已删除的第三态 heuristic-only：
+	// 读入时静默改写为**默认模式**（标签优先 + 旧判定兜底），不报错：磁盘上留着旧值的配置
+	// 既能正常装载，也能被设置页原样存回去（存回去时已是两态字符串）。
 	protocolMode: {
 		kind: "enum",
 		def: "tag-first",
-		values: ["tag-first", "tag-only", "heuristic-only"],
-		aliases: { true: "tag-first", false: "heuristic-only" },
+		values: ["tag-first", "tag-only"],
+		aliases: { true: "tag-first", false: "tag-first", "heuristic-only": "tag-first" },
 	},
 	throttleSeconds: { kind: "number", def: 4, min: 0, max: 3600 },
 	askLatchSeconds: { kind: "number", def: 15, min: 0, max: 86_400 },

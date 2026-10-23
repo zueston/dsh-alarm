@@ -23,13 +23,13 @@ export const DSH_ALARM_SETTINGS_NS = "dsh-alarm";
  *  旧值兼容（读入时静默改写，见 host/routes.js 的 normalize）：modal → topmost、none → topmost。 */
 export const POPUP_STYLES = ["topmost", "toast"];
 
-/** 严格输出协议（三种模式，三选一；与 host/routes.js 的 FIELDS.protocolMode 一致）：
- *  tag-first=标签优先（默认）：先认正文里独占一行的 `[[ALARM:…]]` 标签，**标签没命中时仍用旧判定兜底**
+/** 严格输出协议（**两种模式**，二选一；与 host/routes.js 的 FIELDS.protocolMode 一致）：
+ *  tag-first=默认模式：先认正文里独占一行的 `[[ALARM:…]]` 标签，**标签没命中时仍用旧判定兜底**
  *  （重启看正文正则、待测看状态文件相位）；
- *  tag-only=只认标签（旧判定整条关闭）；
- *  heuristic-only=忽略标签，只走旧判定。
- *  旧布尔配置兼容：读入时 true → tag-first、false → heuristic-only（见 host/routes.js 的 aliases）。 */
-export const PROTOCOL_MODES = ["tag-first", "tag-only", "heuristic-only"];
+ *  tag-only=严格模式：只认标签，两条旧判定整条关闭。
+ *  旧的第三态 `heuristic-only`（「只用旧判定」）已删除：schema 仍**容忍**它（免得老配置装载失败），
+ *  运行期由 host/routes.js 的 aliases 与 lib/alarm.js 的 protocolModeOf() 归一化为 `tag-first`。 */
+export const PROTOCOL_MODES = ["tag-first", "tag-only"];
 
 /** 待测提醒范围（两种模式，二选一）：
  *  all=每个任务状态文件各自提醒（旧行为）；
@@ -40,6 +40,17 @@ export const AWAITING_TEST_SCOPES = ["all", "anchor"];
 export const Config = z.object({
 	/** 报警总开关（关掉后任何条件都不响）。 */
 	enabled: z.boolean().default(true).volatile(),
+
+	// ---- 这张设置卡片注册/显示在哪里（三个空间各一个开关）---------------------
+	// 三个字段必须扁平 volatile（与其它字段同口径：设置页按扁平键读写）。
+	// 卡片自己渲染在四个入口（浮层 / 设置页 / 插件页 / 侧栏），这里控制其中三个
+	// **页面级**入口的注册；浮层归 showInMain（主窗口）管。
+	/** 主窗口：侧栏铃铛入口 + 设置浮层（默认开）。 */
+	showInMain: z.boolean().default(true).volatile(),
+	/** 插件页（plugins.bundle.config）：默认关。 */
+	showInPlugins: z.boolean().default(false).volatile(),
+	/** 设置页（settings.section）：默认关。 */
+	showInSettings: z.boolean().default(false).volatile(),
 	/** 有人要你裁决（ask_user_question）时提醒。 */
 	alertAsk: z.boolean().default(true).volatile(),
 	/** 需要你确认计划（exit_plan_mode）时提醒。 */
@@ -152,12 +163,25 @@ export const Config = z.object({
 	awaitingTestSummary: z.boolean().default(true).volatile(),
 
 	// ---- 严格输出协议（agent 在正文里独占一行写 [[ALARM:…]] 标签）-----------------
-	/** 协议模式（三态，默认 tag-first）：标签优先 + 旧判定兜底 / 只认标签 / 只用旧判定。
+	/** 协议模式（**两态**，默认 tag-first）：默认模式=标签优先 + 旧判定兜底 / 严格模式=只认标签。
 	 *  tag-first（默认）——「需要重启 DSH」先看 [[ALARM:RESTART]]，没写标签时仍按正文措辞判；
 	 *  「待人工测试」先看 [[ALARM:TEST:任务名]]，没写标签时仍监视状态文件相位（旧判定兜底）。
-	 *  tag-only——两条旧判定整条关闭，只认标签；
-	 *  heuristic-only——忽略标签，只走旧判定。 */
-	protocolMode: z.union(PROTOCOL_MODES).default("tag-first").volatile(),
+	 *  tag-only（严格模式）——两条旧判定整条关闭，只认标签。
+	 *
+	 *  **历史值必须留在联合类型里（别删，这是「整个插件装载失败」的护栏）**：
+	 *   - `true` / `false`：1.3.x 里这个字段是 `z.boolean()`，凡是保存过设置页的配置，
+	 *     磁盘上存的就是 `protocolMode: true`（本机 `profiles/desktop/cordis.patch.yml`
+	 *     就是这种形态）。只写字符串时 schemastery 对旧值直接抛错
+	 *     （`$.protocolMode expected "tag-first" | "tag-only" but got true`）→ 插件装载失败、
+	 *     路由 401、侧栏入口消失（已出过一次事故）。
+	 *   - `"heuristic-only"`：1.4.x 三态枚举留下的第三态。
+	 *  联合类型只负责「**能通过校验**」；运行期语义仍只有两态——旧值进到运行期后由
+	 *   host/routes.js 的 `aliases` 与 lib/alarm.js 的 `protocolModeOf()` 一律归一化成
+	 *   `tag-first`（默认模式：标签优先 + 旧判定兜底，绝不静默吞掉旧判定）。 */
+	protocolMode: z
+		.union([z.const("tag-first"), z.const("tag-only"), z.const("heuristic-only"), z.boolean()])
+		.default("tag-first")
+		.volatile(),
 
 	/** 同一类提醒的最小间隔（秒）。 */
 	throttleSeconds: z.number().min(0).default(4).volatile(),

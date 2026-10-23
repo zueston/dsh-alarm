@@ -20,6 +20,13 @@
  *   所有槽位组件都过 `guarded()` 错误边界：任何一块渲染崩了只让这块变空，
  *   绝不让整页白屏（白屏就是 React 卸载整棵宿主树的结果）。
  *
+ * **注册范围可关**（卡片标题行的三个勾选框）：`showInMain`（默认 true，主窗口 = 侧栏铃铛
+ * + 两个浮层）/ `showInPlugins`（默认 false，插件页）/ `showInSettings`（默认 false，设置页）。
+ * 关掉的那一处**注册体渲染 null**（槽位仍在、卡片不在），三处都订阅模块级配置缓存，
+ * 所以勾选后立刻生效、不用重载页面。默认只有主窗口：首次使用时插件页 / 设置页看不到这张卡片。
+ * 三个里只剩一个勾选时那个复选框置灰（否则全关 = 这张卡片再无入口，用户把自己锁在外面）。
+ * 主窗口关掉时两个 `shell.overlay` 弹窗一起不渲染（口径与侧栏入口一致）。
+ *
  * 数据全部走宿主路由的**同源 fetch**（受限运行时没有别的网络能力）：
  *   GET  api/dsh-alarm/config  { values, expected, defaults, options: { wavs, voices } }
  *   POST api/dsh-alarm/config  { expected, values }
@@ -214,6 +221,19 @@ window.__ModuleLoader__.load({
 			return snapshot;
 		}
 
+		/** 某个「注册范围」开关现在是否打开（`showInMain` / `showInPlugins` / `showInSettings`）。
+		 *
+		 *  **必须订阅缓存**（`useConfigCache()`）：勾选框一改就立刻生效，不需要重载页面——
+		 *  这正是「三个勾选框控制这张卡片注册在哪里」的体感要求。
+		 *  **缓存没就绪时按 schema 默认值**（`SLOT_DEFAULT_OF`）：「首次使用只有主窗口」
+		 *  必须在缓存回来之前就成立，否则设置页 / 插件页会先闪一下卡片再消失。
+		 *  值不是布尔（老宿主没这几个键，或存了脏值）时也走同一个回落。 */
+		function useSlotEnabled(key) {
+			const cache = useConfigCache();
+			const value = cache?.values?.[key];
+			return typeof value === 'boolean' ? value : SLOT_DEFAULT_OF[key] === true;
+		}
+
 		// ------------------------------------------------------------------
 		// 字段表
 		// ------------------------------------------------------------------
@@ -224,12 +244,21 @@ window.__ModuleLoader__.load({
 			{ value: 'toast', label: '系统消息（Windows 通知）' },
 		];
 
-		/** 协议模式选项（三态，与宿主 host/config.js 的 PROTOCOL_MODES 一一对应）。
-		 *  默认 `tag-first`：标签优先，**没命中标签时仍用旧判定兜底**。 */
+		/** 严格模式的完整说明（设置页「协议模式」行 `?` 的气泡正文 + `title` 悬停兜底共用同一份文案）。
+		 *  **逐字固定**：两段之间用换行分开，气泡靠 `whiteSpace:'pre-line'` 保留换行。
+		 *  第二段讲默认模式为什么不发协议也不会漏报——用户最容易在「没发协议就切严格模式」时漏报，这里得说清。
+		 *  **文案逐字照抄用户原话，不要「修正」**：第二段 `默认模式 =插件` 的等号后面**确实没有空格**，
+		 *  这是用户给的原文（看起来像笔误，但按要求保留）。改这一行前先问，别顺手加空格。 */
+		const STRICT_MODE_TIP =
+			'严格模式只认 agent 在回复里写的标签（[[ALARM:TEST:任务名]]、[[ALARM:RESTART]] 等），不再猜措辞——更准，但必须先点「编辑报警规则」把协议发给 agent，否则它会漏报：重启与待测都不会提醒。\n' +
+			'默认模式 =插件自主判断，可不发协议，正文提到「要重启 DSH」、状态文件翻到「待人工测试」仍然会提醒。';
+
+		/** 协议模式选项（**两态**，与宿主 host/config.js 的 PROTOCOL_MODES 一一对应）。
+		 *  默认 `tag-first`（默认模式）：标签优先，**没命中标签时仍用旧判定兜底**。 */
 		const PROTOCOL_MODE_OPTIONS = [
-			{ value: 'tag-first', label: '标签优先（标签 + 旧判定兜底）' },
-			{ value: 'tag-only', label: '只认标签' },
-			{ value: 'heuristic-only', label: '只用旧判定' },
+			{ value: 'tag-first', label: '默认模式' },
+			// 严格模式需要一句「没发协议会漏报」的提醒：选项后面挂一个 `?` 说明气泡。
+			{ value: 'tag-only', label: '严格模式', tip: STRICT_MODE_TIP },
 		];
 
 		/** 每条播报文本行共用的帮助文案（是否出声由条件表表头的语音播报总开关决定）。 */
@@ -244,6 +273,29 @@ window.__ModuleLoader__.load({
 			{ id: 'sound', label: '铃声', toggleKey: 'soundEnabled', toggleLabel: '总开关：铃声' },
 			{ id: 'voice', label: '语音播报', toggleKey: 'voice', toggleLabel: '总开关：语音播报' },
 		];
+
+		/** 卡片「注册范围」的三个开关（标题行里的三个勾选框）：键 → 文案 + schema 默认值。
+		 *
+		 *  **扁平 volatile bool**：与 host/config.js 的 schema、host/routes.js 的 FIELDS、
+		 *  lib/alarm.js 的 DEFAULTS **同名同默认**（四处对不上就会出现「勾了不生效」
+		 *  或保存时 `400 invalid values payload`）。
+		 *  语义：主窗口 = 侧栏铃铛 + 设置浮层；插件页 / 设置页 = 同一张卡片的另两个入口。
+		 *  默认只有「主窗口」——首次使用时插件页 / 设置页里看不到这张卡片。 */
+		const SLOT_FIELDS = [
+			{ key: 'showInMain', label: '主窗口', def: true },
+			{ key: 'showInPlugins', label: '插件页', def: false },
+			{ key: 'showInSettings', label: '设置页', def: false },
+		];
+
+		/** 槽位开关的默认值查表（键 → 默认值）：配置缓存还没就绪时按它回落，
+		 *  与宿主 schema 的 `.default(...)` 逐项一致。 */
+		const SLOT_DEFAULT_OF = SLOT_FIELDS.reduce((acc, slot) => {
+			acc[slot.key] = slot.def;
+			return acc;
+		}, {});
+
+		/** 三个里只剩一个勾选时那个复选框的悬停说明：说清为什么点不动（不是坏了）。 */
+		const LAST_SLOT_TITLE = '至少要保留一个入口，否则你再也打不开这个设置页';
 
 		/** 表单分区：每区一张小卡片。`rows` 是条件表（每行 4 个复选框），`fields` 是普通字段行。 */
 		const SECTIONS = [
@@ -345,15 +397,15 @@ window.__ModuleLoader__.load({
 			{
 				id: 'batch',
 				title: '批量测试协调',
-				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。「协议模式」为「只认标签」时，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒；另外两种模式下状态文件相位判定照常参与。',
+				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。「协议模式」为「严格模式」时，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒；「默认模式」下标签照样生效，没写标签时状态文件相位判定还会兜底。',
 				fields: [
 					{
 						key: 'protocolMode',
-						type: 'select',
+						type: 'radio',
 						label: '协议模式',
 						options: PROTOCOL_MODE_OPTIONS,
 						fallback: 'tag-first',
-						help: '「标签优先」= 先认 agent 写的 [[ALARM:...]] 标签，没写标签时仍用旧判定兜底（默认）；「只认标签」= 只认标签；「只用旧判定」= 忽略标签。',
+						help: '默认模式：标签优先，没写标签时用旧判定兜底；严格模式：只认标签（需先发协议）。',
 					},
 					{
 						key: 'awaitingTestScope',
@@ -364,13 +416,13 @@ window.__ModuleLoader__.load({
 							{ value: 'anchor', label: '只提醒路径含锚点的那个状态文件' },
 						],
 						fallback: 'all',
-						help: '「只认标签」模式下不生效（待测只认 [[ALARM:TEST:任务名]] 标签）。全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件。',
+						help: '「严格模式」下不生效（严格模式只认 [[ALARM:TEST:任务名]] 标签）。全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件。',
 					},
 					{
 						key: 'awaitingTestAnchor',
 						type: 'text',
 						label: '批次锚点关键词',
-						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2。「只认标签」模式下不生效。',
+						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2。「严格模式」下不生效。',
 					},
 					{
 						key: 'awaitingTestQuietSeconds',
@@ -478,15 +530,21 @@ window.__ModuleLoader__.load({
 		// 配置结构自愈（页面快照比服务端旧时的检测 + 合并）
 		// ------------------------------------------------------------------
 
-		/** 把 SECTIONS 摊平成「键 → 字段类型」（bool / number / select / text），顺序稳定。
+		/** 把 SECTIONS 摊平成「键 → 字段类型」（bool / number / select / radio / text），顺序稳定。
 		 *
 		 *  **为什么从 SECTIONS 反推而不是手写键表**：宿主 `coerceValues()` 遍历的是服务端
 		 *  `FIELDS` 的每一个键，缺一个就整体返回 null → `400 invalid values payload`。
-		 *  客户端要知道「页面上这份 values 够不够 69 个键」，唯一的真源就是渲染用的同一份
+		 *  客户端要知道「页面上这份 values 够不够 72 个键」，唯一的真源就是渲染用的同一份
 		 *  SECTIONS（条件表每行 4 个 bool + 4 个通道总开关 + 各分区 fields）。
-		 *  手写第二份键表必然与 SECTIONS 走偏，下次加字段又要改两处。 */
+		 *  手写第二份键表必然与 SECTIONS 走偏，下次加字段又要改两处。
+		 *
+		 *  **标题行的 `SLOT_FIELDS` 也要摊进来**：它们不渲染在某个分区里（是标题行的三个
+		 *  勾选框），但同样是 FIELDS 里的字段——漏掉就等于「缺 3 个键」自愈检测永远报 0，
+		 *  页面快照旧了也不会自动补齐。
+		 */
 		function fieldSpecOf(sections) {
 			const spec = new Map();
+			for (const slot of SLOT_FIELDS) spec.set(slot.key, 'bool');
 			for (const section of sections) {
 				for (const column of CONDITION_COLUMNS) spec.set(column.toggleKey, 'bool');
 				for (const row of section.rows ?? []) {
@@ -526,13 +584,14 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 合并时判断「本地这一项能不能盖到新快照上」：类型对得上才算合法。
-		 *  bool 要布尔、number 要有限数字、字符串类要字符串（下拉还要求非空）。
+		 *  bool 要布尔、number 要有限数字、字符串类要字符串（下拉 / 单选还要求非空）。
 		 *  类型不对就当没有——宁可回到服务端的新值，也不要把页面里的半成品发回去
 		 *  让 `coerceValues()` 再整体 400 一次。 */
 		function isUsableValue(kind, value) {
 			if (kind === 'bool') return typeof value === 'boolean';
 			if (kind === 'number') return typeof value === 'number' && Number.isFinite(value);
 			if (kind === 'select') return typeof value === 'string' && value !== '';
+			if (kind === 'radio') return typeof value === 'string' && value !== '';
 			if (kind === 'text') return typeof value === 'string';
 			return false;
 		}
@@ -679,6 +738,67 @@ window.__ModuleLoader__.load({
 			},
 			status: { fontSize: 12, marginLeft: 10, alignSelf: 'center' },
 			suffix: { fontSize: 12, color: COLORS.sub },
+			/** 标题行里那三个「注册范围」勾选框的外壳：一行横排、小字。
+			 *  `marginRight:'auto'` 从这里开始撑开——标题与勾选框在左、按钮组在右（原来由标题撑开）。 */
+			slotToggles: {
+				display: 'flex',
+				alignItems: 'center',
+				gap: 8,
+				fontSize: 12.5,
+				color: COLORS.sub,
+				marginRight: 'auto',
+			},
+			/** 单个勾选项（label 包住复选框 + 文案，点文案也能切换；**复选框本身不加样式**）。 */
+			slotToggle: { display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+			/** 单选组（`type:'radio'` 的字段）：横向排列，选项多时换行。 */
+			radioGroup: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' },
+			/** 单个单选项：外壳做气泡的定位容器（`position:'relative'`），点 `?` 的气泡相对它展开。 */
+			radioItem: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+			radioLabel: {
+				display: 'inline-flex',
+				alignItems: 'center',
+				gap: 6,
+				fontSize: 13,
+				color: COLORS.text,
+				lineHeight: '20px',
+				cursor: 'pointer',
+			},
+			/** `?` 图标的外壳：气泡以它为定位基准（`position:'relative'`）。 */
+			tipWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+			/** 选项后面的 `?` 图标：12px 圆形、1px 边框、可点击（键盘 Tab 可达，`:focus-visible` 走浏览器默认）。 */
+			tipBadge: {
+				display: 'inline-flex',
+				alignItems: 'center',
+				justifyContent: 'center',
+				width: 15,
+				height: 15,
+				marginLeft: 6,
+				borderRadius: '50%',
+				border: `1px solid ${COLORS.border}`,
+				fontSize: 12,
+				lineHeight: '12px',
+				color: COLORS.sub,
+				cursor: 'pointer',
+				userSelect: 'none',
+			},
+			/** 点开的说明气泡：相对所属选项行定位，够宽但不撑破卡片（`whiteSpace:'pre-line'` 保留换行）。 */
+			tipBubble: {
+				position: 'absolute',
+				top: '100%',
+				left: 0,
+				zIndex: 10,
+				marginTop: 6,
+				maxWidth: 360,
+				padding: '8px 10px',
+				borderRadius: 8,
+				border: `1px solid ${COLORS.border}`,
+				background: COLORS.bg,
+				color: COLORS.text,
+				boxShadow: '0 6px 18px rgba(0, 0, 0, 0.18)',
+				fontSize: 12.5,
+				lineHeight: '18px',
+				whiteSpace: 'pre-line',
+			},
 		};
 
 		/** 条件行最左列的「▶ 试听」按钮：STYLE.button 的紧凑版（不把行撑高）。 */
@@ -891,7 +1011,87 @@ window.__ModuleLoader__.load({
 			}));
 		}
 
-		/** 普通字段行（文本 / 数字 / 下拉）。**渲染体**：外面包了 `React.memo`
+		/** 标题行的三个「注册范围」勾选框（主窗口 / 插件页 / 设置页）。
+		 *
+		 *  - 勾选走卡片现成的 `update()`（勾选即自动保存，400ms 防抖），不另设保存按钮。
+		 *  - **兜底**：三个里只剩一个勾选时，把**那一个**置灰并在 `title` 里说明原因——
+		 *    三个全关就等于「这张设置卡片再也没有入口」，用户会把自己锁死在外面。
+		 *  - 复选框本身**不加行内样式**（排版全交给外层 label / 外壳 span）。
+		 *
+		 *  ponytail: 兜底只做在界面上（最后一个勾选置灰），挡不住「手改配置文件 / 直接 POST
+		 *  三个 false」这条旁路。天花板：那种情况下三个入口全不渲染，用户只能去改 YAML 或删配置。
+		 *  升级路径：宿主 `GET/POST /config` 里补一条「三个全 false → 回落 showInMain=true」的
+		 *  归一化（与 `protocolMode` 的 `aliases` 同口径），客户端不用再动。用户没要求，先不加。 */
+		function renderSlotToggles(values, update) {
+			const checkedCount = SLOT_FIELDS.filter((slot) => values?.[slot.key] === true).length;
+			const items = SLOT_FIELDS.map((slot) => {
+				const checked = values?.[slot.key] === true;
+				const lastOne = checked && checkedCount === 1;
+				return h(
+					'label',
+					{ key: slot.key, style: STYLE.slotToggle },
+					h('input', {
+						type: 'checkbox',
+						'aria-label': slot.label,
+						title: lastOne ? LAST_SLOT_TITLE : undefined,
+						disabled: lastOne,
+						checked,
+						onChange: (event) => update(slot.key, event.target.checked),
+					}),
+					slot.label,
+				);
+			});
+			return h('span', { style: STYLE.slotToggles }, items);
+		}
+
+		/** 选项后面的 `?` 说明图标 + 点开的气泡（`role="tooltip"`）。
+		 *
+		 *  - 点击 / 回车 / 空格切换开合；开着时点**别处**也收起（document 上挂 mousedown，
+		 *    目标不在自身子树内就关）——气泡是绝对定位浮层，不收起来会盖住下面的行。
+		 *  - `title` 里放同一份说明，作为**悬停兜底**（未点开也能看到文案；鼠标悬停不依赖 JS）。
+		 *  - `aria-label` 用固定短名（「严格模式说明」），读屏念的是名字而不是整段说明。 */
+		function TipBadge(props) {
+			const { text } = props;
+			const [open, setOpen] = React.useState(false);
+			const rootRef = React.useRef(null);
+			React.useEffect(() => {
+				if (open !== true) return undefined;
+				if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined;
+				const onDown = (event) => {
+					const root = rootRef.current;
+					if (root !== null && typeof root.contains === 'function' && root.contains(event?.target)) return;
+					setOpen(false);
+				};
+				document.addEventListener('mousedown', onDown);
+				return () => document.removeEventListener('mousedown', onDown);
+			}, [open]);
+			const toggle = () => setOpen((previous) => previous !== true);
+			return h(
+				'span',
+				{ ref: rootRef, style: STYLE.tipWrap },
+				h(
+					'span',
+					{
+						role: 'button',
+						tabIndex: 0,
+						'aria-label': '严格模式说明',
+						'aria-expanded': open === true,
+						title: text,
+						style: STYLE.tipBadge,
+						onClick: toggle,
+						onKeyDown: (event) => {
+							if (event?.key !== 'Enter' && event?.key !== ' ') return;
+							event.preventDefault();
+							toggle();
+						},
+					},
+					'?',
+				),
+				open === true ? h('div', { role: 'tooltip', style: STYLE.tipBubble }, text) : null,
+			);
+		}
+
+		/** 普通字段行（文本 / 数字 / 下拉 / 单选）。**渲染体**：外面包了 `React.memo`
 		 *  （见下方 `FieldRow`），别直接当组件用。 */
 		function FieldRowBody(props) {
 			const { field, value, onChange, options } = props;
@@ -951,6 +1151,41 @@ window.__ModuleLoader__.load({
 						choices,
 					),
 				);
+			} else if (field.type === 'radio') {
+				const list = options ?? field.options ?? [];
+				const raw = value === undefined || value === null ? '' : String(value);
+				const known = list.some((o) => (typeof o === 'string' ? o : o.value) === raw);
+				// 读到不在选项里的值（含宿主没归一化干净的旧值）时界面按 fallback 选中，
+				// 与 select 同口径：**不写回配置**——用户不动这一项，配置里就保持原值。
+				const current = known ? raw : (field.fallback ?? (list.length > 0 ? (typeof list[0] === 'string' ? list[0] : list[0].value) : ''));
+				const items = [];
+				for (const option of list) {
+					const optionValue = typeof option === 'string' ? option : option.value;
+					const optionLabel = typeof option === 'string' ? option : option.label;
+					const tip = typeof option === 'string' ? undefined : option.tip;
+					items.push(
+						h(
+							'span',
+							{ key: optionValue, style: STYLE.radioItem },
+							h(
+								'label',
+								{ style: STYLE.radioLabel },
+								h('input', {
+									type: 'radio',
+									name: field.key,
+									value: optionValue,
+									'aria-label': field.label,
+									checked: optionValue === current,
+									onChange: () => onChange(field.key, optionValue),
+								}),
+								h('span', null, optionLabel),
+							),
+							// 选项自带说明（如「严格模式」的漏报提醒）时，后面跟一个 `?` 气泡。
+							tip === undefined ? null : h(TipBadge, { text: tip }),
+						),
+					);
+				}
+				control.push(h('div', { key: 'radio', style: STYLE.radioGroup }, items));
 			} else {
 				control.push(
 					h('input', {
@@ -962,6 +1197,12 @@ window.__ModuleLoader__.load({
 					}),
 				);
 			}
+			// 单选的 help 放在**控件下方**（横向排列的选项 + 说明气泡都在控件区里，
+			// 左边那列只有字段名，否则长 help 会把选项挤到右边一窄条）。
+			const helpBelow = field.type === 'radio' && field.help !== undefined;
+			const controlStyle = helpBelow
+				? { ...STYLE.control, flexDirection: 'column', alignItems: 'flex-start', gap: 6 }
+				: STYLE.control;
 			return h(
 				'div',
 				{ style: STYLE.row },
@@ -969,9 +1210,9 @@ window.__ModuleLoader__.load({
 					'div',
 					{ style: STYLE.label },
 					field.label,
-					field.help ? h('span', { style: STYLE.help }, field.help) : null,
+					field.help && !helpBelow ? h('span', { style: STYLE.help }, field.help) : null,
 				),
-				h('div', { style: STYLE.control }, control),
+				h('div', { style: controlStyle }, helpBelow ? [...control, h('span', { key: 'help', style: STYLE.help }, field.help)] : control),
 			);
 		}
 
@@ -1325,7 +1566,7 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			/** 「恢复默认」：第一下只进入确认态（按钮变「确认恢复？」，3 秒后自动回落成「恢复默认」），
-			 *  确认态下再点一次才真的执行——把**所有字段**（含 69 个）整体替换为宿主给的
+			 *  确认态下再点一次才真的执行——把**所有字段**（含 72 个）整体替换为宿主给的
 			 *  `defaults`（用 `applyValues`），并**立刻**走一次手动保存（复用 `persist`，mode='manual'）。
 			 *  **语义边界**：恢复默认 = 全字段重置 + 立即落盘，不做「按分区恢复」。
 			 *  先清掉待触发的自动保存：它带着的是重置前的 values，晚到会把默认值又盖回去。 */
@@ -1404,13 +1645,18 @@ window.__ModuleLoader__.load({
 			const headerRow = h(
 				'div',
 				{ style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: '0 0 auto', marginTop: 0, marginBottom: 10, background: COLORS.bg, paddingTop: 10, paddingBottom: 10, borderBottom: `1px solid ${COLORS.border}` } },
-				// 标题在最左，`marginRight:'auto'` 把右边那组按钮（编辑报警规则 / 重新载入 / 恢复默认 /
+				// 标题在最左；右半边由标题后面的三个「注册范围」勾选框用 `marginRight:'auto'`
+				// （`STYLE.slotToggles`）撑开，把按钮组（编辑报警规则 / 重新载入 / 恢复默认 /
 				// 保存 / ❌）整组推到行尾。
 				h(
 					'span',
-					{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text, marginRight: 'auto' } },
+					{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text } },
 					'报警提醒',
 				),
+				// 三个勾选框紧跟在标题后面（用户指定的位置）：控制这张卡片注册/显示在
+				// 主窗口（侧栏铃铛 + 设置浮层）/ 插件页 / 设置页——默认只有主窗口。
+				// 勾选走 `update()`，与其它字段同一条自动保存路径。
+				renderSlotToggles(values, update),
 				// 「编辑报警规则」放在「重新载入」**之前**（用户指定的位置）：它只是「看 + 复制」
 				// 规则的入口，不改配置；后面才是重新载入 / 保存 / ❌ 这组改配置的按钮。
 				// 四个入口（浮层弹窗 / 设置页 / 插件页 / 侧栏）都渲染同一张卡片，所以都会出现它。
@@ -1427,7 +1673,7 @@ window.__ModuleLoader__.load({
 				),
 				h('button', { type: 'button', style: STYLE.button, disabled: busy !== '', onClick: load }, '重新载入'),
 				// 「恢复默认」在「重新载入」之后、「保存」之前（用户指定的位置）：
-				// 它写配置，但写的是「FIELDS 默认值」——先确认态再执行，避免一次误点把 69 个字段全刷掉。
+				// 它写配置，但写的是「FIELDS 默认值」——先确认态再执行，避免一次误点把 72 个字段全刷掉。
 				h(
 					'button',
 					{
@@ -1743,13 +1989,42 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/** `sidebar.panellist` 的注册体：**主窗口开关关掉后整块不渲染**（连图标都不注册出来）。
+		 *
+		 *  订阅缓存（`useSlotEnabled`）而不是看挂载时的一次快照：用户勾掉「主窗口」后
+		 *  侧栏那条要当场消失，不需要重载页面。 */
+		function SidebarEntry(props) {
+			const mainEnabled = useSlotEnabled('showInMain');
+			if (!mainEnabled) return null;
+			return h(AlarmPanelIcon, props);
+		}
+
+		/** `settings.section` 的注册体：设置页卡片，只在 `showInSettings` 为真时渲染。 */
+		function SettingsSectionEntry() {
+			const settingsEnabled = useSlotEnabled('showInSettings');
+			if (!settingsEnabled) return null;
+			return h('div', { style: { padding: '4px 0' } }, h(AlarmSettingsCard, {}));
+		}
+
+		/** `plugins.bundle.config` 的注册体：插件页卡片，只在 `showInPlugins` 为真时渲染。 */
+		function PluginsConfigEntry() {
+			const pluginsEnabled = useSlotEnabled('showInPlugins');
+			if (!pluginsEnabled) return null;
+			return h(AlarmSettingsCard, {});
+		}
+
 		/** 弹窗层：`shell.overlay` 槽位里**唯一**渲染 AlarmDialog 的地方。
 		 *
 		 *  改走宿主官方浮层槽位、不再用 portal 挂 body：portal 那条路
 		 *  一出现就白屏（用户实测），槽位是宿主自己管理的浮层容器，稳定。
 		 *  开关仍由模块级标志 `iconDialogOpen` 驱动（侧栏铃铛只置它）。 */
 		function AlarmDialogLayer({ ctx }) {
+			// 主窗口开关与弹窗标志都是 hook，**必须在提前 return 之前调用**（Hook 顺序固定）。
+			const mainEnabled = useSlotEnabled('showInMain');
 			const isOpen = useIconDialogOpen();
+			// 主窗口关了就一起关：否则「关掉主窗口」之后还能从别处把设置浮层唤起，
+			// 与侧栏铃铛入口的口径不一致（勾选框承诺的是「主窗口不再注册这张卡片」）。
+			if (!mainEnabled) return null;
 			if (!isOpen) return null;
 			const onRequestClose = () => {
 				setIconDialogOpen(false);
@@ -2040,7 +2315,10 @@ window.__ModuleLoader__.load({
 		 *  关闭**只置标志**，不调 `ctx.layout.selectPanel`：本弹窗不切主区域
 		 *  （设置浮层那条路径才需要把主区域拉回会话）。 */
 		function RulesDialogLayer() {
+			// 与设置浮层同一口径：主窗口关掉后，规则弹窗也不能再被唤起（Hook 顺序固定）。
+			const mainEnabled = useSlotEnabled('showInMain');
 			const isOpen = useRulesDialogOpen();
+			if (!mainEnabled) return null;
 			if (!isOpen) return null;
 			return h(RulesDialog, { onRequestClose: () => setRulesDialogOpen(false) });
 		}
@@ -2069,7 +2347,8 @@ window.__ModuleLoader__.load({
 							label: () => '报警提醒',
 						},
 						// 图标只置「要弹窗」的标志，弹窗本体由下面的 shell.overlay 层渲染。
-						guarded('sidebar.panellist', (props) => h(AlarmPanelIcon, { ...props, ctx })),
+						// 注册体是 `SidebarEntry`：`showInMain` 关掉时它渲染 null（侧栏无入口）。
+						guarded('sidebar.panellist', (props) => h(SidebarEntry, { ...props, ctx })),
 					),
 				);
 				// 设置弹窗：宿主官方浮层槽位（**不再用 portal**）。
@@ -2106,7 +2385,8 @@ window.__ModuleLoader__.load({
 							order: 51,
 							label: () => '报警提醒',
 						},
-						guarded('settings.section', () => h('div', { style: { padding: '4px 0' } }, h(AlarmSettingsCard, {}))),
+						// 注册体自带开关：`showInSettings` 关掉时渲染 null（等于这一页没有这张卡片）。
+						guarded('settings.section', () => h(SettingsSectionEntry, {})),
 					),
 				);
 				ctx.slots.inject('plugins.bundle.config', () =>
@@ -2115,7 +2395,8 @@ window.__ModuleLoader__.load({
 							name: 'plugins.bundle.config',
 							key: NS,
 						},
-						guarded('plugins.bundle.config', () => h(AlarmSettingsCard, {})),
+						// 注册体自带开关：`showInPlugins` 关掉时渲染 null。
+						guarded('plugins.bundle.config', () => h(PluginsConfigEntry, {})),
 					),
 				);
 			},

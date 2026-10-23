@@ -6,8 +6,9 @@
  *   - **5 处槽位注册**：`sidebar.panellist`(33)、`shell.overlay`×2（设置弹窗
  *     `dsh-alarm.settings-dialog` order 120 + 规则弹窗 `dsh-alarm.rules-dialog` order 121）、
  *     `settings.section`(51)、`plugins.bundle.config`；**绝不注册 `main`**（白屏根因，已删除）；
- *   - 设置字段总数 **69**；`GET config` 的 `defaults` 键集合与 `values` 完全相同（「恢复默认」用），
- *     且旧布尔 `protocolMode: true/false` 提交时归一化为 `tag-first` / `heuristic-only`；
+ *   - 设置字段总数 **72**；`GET config` 的 `defaults` 键集合与 `values` 完全相同（「恢复默认」用），
+ *     且协议模式是**两态**：`defaults.protocolMode === 'tag-first'`，旧布尔 `protocolMode: true/false`
+ *     与已删除的第三态 `'heuristic-only'` 提交时一律归一化为 `tag-first`、`'tag-only'` 原样保留；
  *     `GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
  *     里第一个 ```text 围栏块的字符数；
  *   - `lib/alarm.js` 的 `parseAlarmTags`（严格输出协议）：6 个标签各一条 + 行内出现不匹配
@@ -117,9 +118,13 @@ let snapshot;
   assert.ok(Array.isArray(payload.options.wavs), 'wavs 必须是数组');
   assert.ok(payload.options.wavs.length > 20, `wavs 太少: ${payload.options.wavs.length}`);
   assert.ok(Array.isArray(payload.options.voices), 'voices 必须是数组');
-  assert.strictEqual(Object.keys(payload.values).length, 69);
+  assert.strictEqual(Object.keys(payload.values).length, 72);
   assert.strictEqual(payload.values.sound, 'Alarm03.wav');
   assert.strictEqual(payload.values.popupStyle, 'topmost');
+  // 卡片注册范围（标题行三个勾选框）：默认只有「主窗口」，插件页 / 设置页默认关。
+  assert.strictEqual(payload.values.showInMain, true, 'showInMain 默认应为 true');
+  assert.strictEqual(payload.values.showInPlugins, false, 'showInPlugins 默认应为 false');
+  assert.strictEqual(payload.values.showInSettings, false, 'showInSettings 默认应为 false');
   // 默认只提醒「裁决 / 确认计划 / 任务完成 / 本轮报错」；「每轮结束」「本轮中断」默认关闭。
   assert.strictEqual(payload.values.alertAsk, true);
   assert.strictEqual(payload.values.alertPlan, true);
@@ -133,7 +138,7 @@ let snapshot;
   assert.strictEqual(payload.values.alertAwaitingTest, true);
   // 「需要重启 DSH」提醒默认开。
   assert.strictEqual(payload.values.alertRestart, true);
-  // 严格输出协议是三态枚举，默认 `tag-first`（标签优先 + 旧判定兜底）。
+  // 严格输出协议是两态枚举，默认 `tag-first`（默认模式：标签优先 + 旧判定兜底）。
   assert.strictEqual(payload.values.protocolMode, 'tag-first');
   // 「Agent 停下来且没有后续动作」默认开；与其它轻事件一样默认不弹窗。
   assert.strictEqual(payload.values.alertStalled, true);
@@ -198,7 +203,16 @@ let snapshot;
     Object.keys(payload.values).sort(),
     'defaults 的键集合必须与 values 完全相同',
   );
-  assert.strictEqual(Object.keys(payload.defaults).length, 69, 'defaults 也必须恰好 69 个键');
+  assert.strictEqual(Object.keys(payload.defaults).length, 72, 'defaults 也必须恰好 72 个键');
+  // 三个「注册范围」字段必须同时出现在 values 与 defaults 里：前端拿 defaults 整体替换页面
+  // values，缺任何一个键都会让宿主 `coerceValues()` 整体返回 null → 400。
+  for (const key of ['showInMain', 'showInPlugins', 'showInSettings']) {
+    assert.strictEqual(key in payload.values, true, `values 缺 ${key}`);
+    assert.strictEqual(key in payload.defaults, true, `defaults 缺 ${key}`);
+  }
+  assert.strictEqual(payload.defaults.showInMain, true, 'defaults.showInMain 必须是 true');
+  assert.strictEqual(payload.defaults.showInPlugins, false, 'defaults.showInPlugins 必须是 false');
+  assert.strictEqual(payload.defaults.showInSettings, false, 'defaults.showInSettings 必须是 false');
   assert.strictEqual(payload.defaults.protocolMode, 'tag-first', 'defaults.protocolMode 必须是 tag-first');
   assert.strictEqual(payload.defaults.alertStalled, true, 'defaults.alertStalled 必须是 true');
   assert.strictEqual(payload.defaults.popupStyle, 'topmost', 'defaults.popupStyle 必须是 topmost');
@@ -251,7 +265,9 @@ let snapshot;
   console.log('POST invalid ok: 400');
 }
 
-// ---------------- POST /config：旧布尔 protocolMode 兼容（true / false → 三态枚举）----------------
+// ---------------- POST /config：协议模式 = 两态 + 历史值全归一化到 tag-first ----------------
+// 这次事故的回归护栏：磁盘上的旧值（1.3.x 的布尔 true/false、1.4.x 的第三态 heuristic-only）
+// 提交上来**不能 400**，一律静默改写成 tag-first；只有 'tag-only' 是「另一个合法值」。
 {
   const current = await getConfig();
   const res = makeRes();
@@ -274,11 +290,37 @@ let snapshot;
   );
   assert.strictEqual(res.status, 200, `应 200，实际 ${res.status}: ${res.body}`);
   const payload = JSON.parse(res.body);
-  assert.strictEqual(payload.values.protocolMode, 'heuristic-only', '旧的 false 必须归一化为 heuristic-only');
-  assert.strictEqual(writes.at(-1).values.protocolMode, 'heuristic-only', '写入磁盘的值必须是 heuristic-only');
-  // defaults 与当前配置**无关**：此刻磁盘上是 heuristic-only，defaults 仍是 tag-first。
+  assert.strictEqual(payload.values.protocolMode, 'tag-first', '旧的 false 必须归一化为 tag-first');
+  assert.strictEqual(writes.at(-1).values.protocolMode, 'tag-first', '写入磁盘的值必须是 tag-first');
+  console.log('POST protocolMode=false ok: false → tag-first');
+}
+{
+  const current = await getConfig();
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', { expected: current.values, values: { ...current.values, protocolMode: 'heuristic-only' } }),
+    res,
+  );
+  assert.strictEqual(res.status, 200, `应 200，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.values.protocolMode, 'tag-first', '已删除的 heuristic-only 必须归一化为 tag-first');
+  assert.strictEqual(writes.at(-1).values.protocolMode, 'tag-first', '写入磁盘的值必须是 tag-first');
+  // defaults 与当前配置**无关**：此刻磁盘上是归一化后的值，defaults 仍是 tag-first。
   assert.strictEqual(payload.defaults.protocolMode, 'tag-first', 'defaults 必须与当前配置无关');
-  console.log('POST protocolMode=false ok: false → heuristic-only（defaults 仍为 tag-first）');
+  console.log('POST protocolMode=heuristic-only ok: heuristic-only → tag-first（defaults 仍为 tag-first）');
+}
+{
+  const current = await getConfig();
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', { expected: current.values, values: { ...current.values, protocolMode: 'tag-only' } }),
+    res,
+  );
+  assert.strictEqual(res.status, 200, `应 200，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.values.protocolMode, 'tag-only', "要存的 'tag-only' 必须原样保留");
+  assert.strictEqual(writes.at(-1).values.protocolMode, 'tag-only', "写入磁盘的值必须是 'tag-only'");
+  console.log("POST protocolMode=tag-only ok: 'tag-only' 原样保留");
 }
 
 // ---------------- 非 loopback 拒绝 ----------------
@@ -468,6 +510,13 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
     return React;
   });
   assert.deepStrictEqual(mod.inject, ['slots']);
+  // 客户端键表（`missingFieldKeys({})` = 整张表）必须与宿主 `FIELDS` 的键表**逐键一致**：
+  // 少一个键，页面快照旧了也不会自愈，保存时宿主 `coerceValues()` 直接 400。
+  // 标题行的三个 `showIn*` 字段不渲染在任何分区里，最容易漏在这张表外面。
+  const clientKeys = mod.missingFieldKeys({}).sort();
+  assert.strictEqual(clientKeys.length, 72, `client 键表应有 72 个键，实际 ${clientKeys.length}`);
+  assert.deepStrictEqual(clientKeys, Object.keys(snapshot).sort(), 'client 键表必须与宿主 FIELDS 完全一致');
+  console.log('client 键表 ok: %d 键，与宿主 FIELDS 逐键一致', clientKeys.length);
   mod.apply({ slots: fakeSlots });
   assert.ok(memoCalls >= 3, `client.js 应至少调用 3 次 React.memo（列名行/条件行/字段行），实际 ${memoCalls}`);
   assert.strictEqual(registered.length, 5, `应注册 5 处槽位，实际 ${registered.length}`);
