@@ -21,13 +21,14 @@
  *   绝不让整页白屏（白屏就是 React 卸载整棵宿主树的结果）。
  *
  * 数据全部走宿主路由的**同源 fetch**（受限运行时没有别的网络能力）：
- *   GET  api/dsh-alarm/config  { values, expected, options: { wavs, voices } }
+ *   GET  api/dsh-alarm/config  { values, expected, defaults, options: { wavs, voices } }
  *   POST api/dsh-alarm/config  { expected, values }
  *   POST api/dsh-alarm/test    { kind, values }  （按页面当前勾选试听：连未保存的改动一起发）
  *   GET  api/dsh-alarm/agent-rules { ok, text, source, missing }  （「编辑报警规则」弹窗的只读正文）
  *
  * 勾选即自动保存（400ms 防抖）：改完就落盘，不再有「勾了但没点保存」的状态；
- * 底部「保存」按钮保留为手动重试入口，「重新载入」丢弃本地改动回到磁盘配置。
+ * 底部「保存」按钮保留为手动重试入口，「重新载入」丢弃本地改动回到磁盘配置，
+ * 「恢复默认」把**所有字段**重置为宿主给的 `defaults` 并立即保存（二次确认，3 秒回落）。
  *
  * **配置走模块级缓存**（`configCache` / `refreshConfig()` / `useConfigCache()`）：
  * `apply()` 里预加载一次，卡片挂载时先吃缓存、缓存没就绪才发请求；保存成功后回写缓存。
@@ -93,6 +94,9 @@ window.__ModuleLoader__.load({
 		/** 勾选即自动保存的防抖窗口（ms）：连续勾选只发一次 POST。 */
 		const AUTO_SAVE_DELAY_MS = 400;
 
+		/** 「恢复默认」的二次确认窗口（ms）：进入确认态后这么久自动回落到「恢复默认」。 */
+		const RESET_CONFIRM_MS = 3000;
+
 		async function apiRequest(resource, options) {
 			try {
 				const response = await fetch(`${API_BASE}${resource}`, {
@@ -143,6 +147,9 @@ window.__ModuleLoader__.load({
 			status: 'idle',
 			values: null,
 			expected: null,
+			/** 所有字段的默认值（宿主 GET /config 的 `defaults`）：「恢复默认」整体替换用。
+			 *  缺失（老宿主）时保持 null → 那个按钮置灰。 */
+			defaults: null,
 			options: EMPTY_OPTIONS,
 			error: null,
 		};
@@ -176,6 +183,7 @@ window.__ModuleLoader__.load({
 						status: 'ok',
 						values: result.value?.values ?? null,
 						expected: result.value?.expected ?? result.value?.values ?? null,
+						defaults: result.value?.defaults ?? null,
 						options: result.value?.options ?? EMPTY_OPTIONS,
 						error: null,
 					});
@@ -214,6 +222,14 @@ window.__ModuleLoader__.load({
 		const POPUP_STYLE_OPTIONS = [
 			{ value: 'topmost', label: '强弹窗（置顶窗口，自动关闭）' },
 			{ value: 'toast', label: '系统消息（Windows 通知）' },
+		];
+
+		/** 协议模式选项（三态，与宿主 host/config.js 的 PROTOCOL_MODES 一一对应）。
+		 *  默认 `tag-first`：标签优先，**没命中标签时仍用旧判定兜底**。 */
+		const PROTOCOL_MODE_OPTIONS = [
+			{ value: 'tag-first', label: '标签优先（标签 + 旧判定兜底）' },
+			{ value: 'tag-only', label: '只认标签' },
+			{ value: 'heuristic-only', label: '只用旧判定' },
 		];
 
 		/** 每条播报文本行共用的帮助文案（是否出声由条件表表头的语音播报总开关决定）。 */
@@ -329,13 +345,15 @@ window.__ModuleLoader__.load({
 			{
 				id: 'batch',
 				title: '批量测试协调',
-				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。严格协议模式下，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒。',
+				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。「协议模式」为「只认标签」时，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒；另外两种模式下状态文件相位判定照常参与。',
 				fields: [
 					{
 						key: 'protocolMode',
-						type: 'bool',
-						label: '严格协议模式（只认标签）',
-						help: '开启后「需要重启 DSH」只认 [[ALARM:RESTART]]、「任务到待人工测试」只认 [[ALARM:TEST:任务名]] 标签；关闭则兼容旧判定（正文措辞 + 状态文件相位）。默认开启。',
+						type: 'select',
+						label: '协议模式',
+						options: PROTOCOL_MODE_OPTIONS,
+						fallback: 'tag-first',
+						help: '「标签优先」= 先认 agent 写的 [[ALARM:...]] 标签，没写标签时仍用旧判定兜底（默认）；「只认标签」= 只认标签；「只用旧判定」= 忽略标签。',
 					},
 					{
 						key: 'awaitingTestScope',
@@ -346,13 +364,13 @@ window.__ModuleLoader__.load({
 							{ value: 'anchor', label: '只提醒路径含锚点的那个状态文件' },
 						],
 						fallback: 'all',
-						help: '仅旧模式生效：严格协议模式下待测只认 [[ALARM:TEST:任务名]] 标签。全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件。',
+						help: '「只认标签」模式下不生效（待测只认 [[ALARM:TEST:任务名]] 标签）。全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件。',
 					},
 					{
 						key: 'awaitingTestAnchor',
 						type: 'text',
 						label: '批次锚点关键词',
-						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2。严格协议模式下不生效。',
+						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2。「只认标签」模式下不生效。',
 					},
 					{
 						key: 'awaitingTestQuietSeconds',
@@ -1045,6 +1063,23 @@ window.__ModuleLoader__.load({
 			const [status, setStatus] = useState(null);
 			const [error, setError] = useState(null);
 
+			/** 「恢复默认」的二次确认态：true = 已进入确认（`RESET_CONFIRM_MS` 后自动回落）。
+			 *  第一下只进入确认态，第二下才真的执行——重置全部字段是不可撤销的写操作。 */
+			const [resetArmed, setResetArmed] = useState(false);
+			/** 二次确认的回落定时器句柄（卸载 / 重复点击时清掉）。 */
+			const resetTimer = useRef(null);
+			/** 「恢复默认」要用的默认值快照：宿主 `GET config` 带回来的 `defaults`。
+			 *  **可用性判定**：缺失（老宿主没这个字段）或键数与页面 `values` 不一致
+			 *  （插件热升级前后结构不同）时按钮置灰——否则会把一份缺键的对象整体发上去，
+			 *  宿主 `coerceValues()` 直接 400。 */
+			const defaults = cache.defaults ?? null;
+			const defaultsUsable =
+				defaults !== null &&
+				typeof defaults === 'object' &&
+				values !== null &&
+				values !== undefined &&
+				Object.keys(defaults).length === Object.keys(values).length;
+
 			/** 自动保存的防抖定时器（卸载/重新载入时清掉未触发的那一次）。 */
 			const autoSaveTimer = useRef(null);
 			/** 页面当前状态与「已保存快照」的镜像：防抖回调与试听都从这里读，
@@ -1161,19 +1196,25 @@ window.__ModuleLoader__.load({
 				})();
 			}, [values, applyExpected, applyValues]);
 
-			/** 卸载时清掉未触发的定时器（别让组件已经没了还去 POST）。 */
+			/** 卸载时清掉未触发的定时器（别让组件已经没了还去 POST / 把确认态改成 false）。 */
 			useEffect(
 				() => () => {
 					cancelAutoSave();
+					if (resetTimer.current !== null) {
+						clearTimeout(resetTimer.current);
+						resetTimer.current = null;
+					}
 				},
 				[cancelAutoSave],
 			);
 
-			/** 把一份 values 提交给宿主：手动保存与自动保存共用同一条路径。
+			/** 把一份 values 提交给宿主：手动保存、自动保存与「恢复默认」共用同一条路径。
 			 *  `mode === 'auto'` 时提示更轻（409 不叫用户再点保存），
-			 *  且**不回写 values**——自动保存返回时用户可能已经在改下一项了。 */
+			 *  且**不回写 values**——自动保存返回时用户可能已经在改下一项了。
+			 *  `successText` 是成功态提示语（缺省「已保存」）：只有「恢复默认」需要一句
+			 *  说明这次不是普通保存，免得用户以为只落了某个分区。 */
 			const persist = useCallback(
-				async (valuesToSave, mode) => {
+				async (valuesToSave, mode, successText) => {
 					if (valuesToSave === null || valuesToSave === undefined) return;
 					const auto = mode === 'auto';
 					// 自动保存不占用 busy：busy 会把每行的 ▶ 按钮置灰（`disabled: busy !== ''`），
@@ -1187,6 +1228,7 @@ window.__ModuleLoader__.load({
 						const saved = result.value?.values ?? valuesToSave;
 						const savedExpected = result.value?.expected ?? saved;
 						const savedOptions = result.value?.options ?? configCache.options;
+						const savedDefaults = result.value?.defaults ?? configCache.defaults;
 						if (!auto) applyValues(saved);
 						applyExpected(savedExpected);
 						setOptions(savedOptions);
@@ -1196,11 +1238,12 @@ window.__ModuleLoader__.load({
 							status: 'ok',
 							values: saved,
 							expected: savedExpected,
+							defaults: savedDefaults,
 							options: savedOptions,
 							error: null,
 						});
 						setError(null);
-						setStatus({ kind: 'ok', text: '已保存' });
+						setStatus({ kind: 'ok', text: successText ?? '已保存' });
 					} else if (result.status === 409) {
 						const fresh = result.value?.values ?? null;
 						if (fresh !== null) {
@@ -1208,7 +1251,13 @@ window.__ModuleLoader__.load({
 							applyExpected(fresh);
 							// 409 时宿主已经把磁盘上的新值给了我们，缓存也必须跟着换，
 							// 否则下次开弹窗又会显示冲突前的旧值。
-							setConfigCache({ status: 'ok', values: fresh, expected: fresh, error: null });
+							setConfigCache({
+								status: 'ok',
+								values: fresh,
+								expected: fresh,
+								defaults: result.value?.defaults ?? configCache.defaults,
+								error: null,
+							});
 						}
 						setStatus({
 							kind: 'bad',
@@ -1265,6 +1314,38 @@ window.__ModuleLoader__.load({
 				cancelAutoSave();
 				void persist(latestValues.current, 'manual');
 			}, [cancelAutoSave, persist]);
+
+			/** 退出「恢复默认」的二次确认态（同时清掉回落定时器）。 */
+			const cancelResetArm = useCallback(() => {
+				if (resetTimer.current !== null) {
+					clearTimeout(resetTimer.current);
+					resetTimer.current = null;
+				}
+				setResetArmed(false);
+			}, []);
+
+			/** 「恢复默认」：第一下只进入确认态（按钮变「确认恢复？」，3 秒后自动回落成「恢复默认」），
+			 *  确认态下再点一次才真的执行——把**所有字段**（含 69 个）整体替换为宿主给的
+			 *  `defaults`（用 `applyValues`），并**立刻**走一次手动保存（复用 `persist`，mode='manual'）。
+			 *  **语义边界**：恢复默认 = 全字段重置 + 立即落盘，不做「按分区恢复」。
+			 *  先清掉待触发的自动保存：它带着的是重置前的 values，晚到会把默认值又盖回去。 */
+			const resetToDefaults = useCallback(() => {
+				if (!defaultsUsable) return;
+				if (resetArmed) {
+					cancelResetArm();
+					cancelAutoSave();
+					const restored = { ...defaults };
+					applyValues(restored);
+					void persist(restored, 'manual', '已恢复默认设置');
+					return;
+				}
+				setResetArmed(true);
+				if (resetTimer.current !== null) clearTimeout(resetTimer.current);
+				resetTimer.current = setTimeout(() => {
+					resetTimer.current = null;
+					setResetArmed(false);
+				}, RESET_CONFIRM_MS);
+			}, [applyValues, cancelAutoSave, cancelResetArm, defaults, defaultsUsable, persist, resetArmed]);
 
 			/** 试听某一行的条件：按**页面当前勾选**（含还没保存的改动）让宿主立刻模拟一次。
 			 *  `kind` 就是条件表里那一行的 kind（ask / plan / task-complete / … / test）。
@@ -1323,8 +1404,8 @@ window.__ModuleLoader__.load({
 			const headerRow = h(
 				'div',
 				{ style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: '0 0 auto', marginTop: 0, marginBottom: 10, background: COLORS.bg, paddingTop: 10, paddingBottom: 10, borderBottom: `1px solid ${COLORS.border}` } },
-				// 标题在最左，`marginRight:'auto'` 把右边那组按钮（编辑报警规则 / 重新载入 / 保存 / ❌）
-				// 整组推到行尾。
+				// 标题在最左，`marginRight:'auto'` 把右边那组按钮（编辑报警规则 / 重新载入 / 恢复默认 /
+				// 保存 / ❌）整组推到行尾。
 				h(
 					'span',
 					{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text, marginRight: 'auto' } },
@@ -1345,6 +1426,24 @@ window.__ModuleLoader__.load({
 					'编辑报警规则',
 				),
 				h('button', { type: 'button', style: STYLE.button, disabled: busy !== '', onClick: load }, '重新载入'),
+				// 「恢复默认」在「重新载入」之后、「保存」之前（用户指定的位置）：
+				// 它写配置，但写的是「FIELDS 默认值」——先确认态再执行，避免一次误点把 69 个字段全刷掉。
+				h(
+					'button',
+					{
+						type: 'button',
+						style: STYLE.button,
+						disabled: busy !== '' || !defaultsUsable,
+						title: defaultsUsable
+							? resetArmed
+								? '再点一次就把所有设置恢复为默认值并立即保存'
+								: '把所有设置恢复为默认值并立即保存'
+							: '默认值不可用，请先点「重新载入」',
+						'aria-label': '恢复默认',
+						onClick: resetToDefaults,
+					},
+					resetArmed ? '确认恢复？' : '恢复默认',
+				),
 				h('button', { type: 'button', style: STYLE.primary, disabled: busy !== '', onClick: save }, busy === 'save' ? '保存中…' : '保存'),
 				status !== null
 					? h(

@@ -6,7 +6,9 @@
  *   - **5 处槽位注册**：`sidebar.panellist`(33)、`shell.overlay`×2（设置弹窗
  *     `dsh-alarm.settings-dialog` order 120 + 规则弹窗 `dsh-alarm.rules-dialog` order 121）、
  *     `settings.section`(51)、`plugins.bundle.config`；**绝不注册 `main`**（白屏根因，已删除）；
- *   - 设置字段总数 **69**；`GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
+ *   - 设置字段总数 **69**；`GET config` 的 `defaults` 键集合与 `values` 完全相同（「恢复默认」用），
+ *     且旧布尔 `protocolMode: true/false` 提交时归一化为 `tag-first` / `heuristic-only`；
+ *     `GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
  *     里第一个 ```text 围栏块的字符数；
  *   - `lib/alarm.js` 的 `parseAlarmTags`（严格输出协议）：6 个标签各一条 + 行内出现不匹配
  *     + 大小写错误不匹配 + TEST 空任务名。
@@ -94,6 +96,15 @@ assert.ok(byPath['/api/dsh-alarm/health'], '缺 health 路由');
 for (const route of routes) assert.strictEqual(route.kind, 'exact');
 console.log('routes ok: %d 条 -> %s', routes.length, Object.keys(byPath).join(', '));
 
+/** GET 一次 /config（返回 { values, expected, defaults, options }）：后面的 POST 用例要拿
+ *  **当前**快照当 `expected`，否则乐观并发会 409 而不是测到想测的那条分支。 */
+async function getConfig() {
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(makeReq('GET'), res);
+  assert.strictEqual(res.status, 200, `GET 应 200，实际 ${res.status}`);
+  return JSON.parse(res.body);
+}
+
 // ---------------- GET /config ----------------
 let snapshot;
 {
@@ -122,8 +133,8 @@ let snapshot;
   assert.strictEqual(payload.values.alertAwaitingTest, true);
   // 「需要重启 DSH」提醒默认开。
   assert.strictEqual(payload.values.alertRestart, true);
-  // 严格输出协议默认开（只认正文里的 [[ALARM:…]] 标签）。
-  assert.strictEqual(payload.values.protocolMode, true);
+  // 严格输出协议是三态枚举，默认 `tag-first`（标签优先 + 旧判定兜底）。
+  assert.strictEqual(payload.values.protocolMode, 'tag-first');
   // 「Agent 停下来且没有后续动作」默认开；与其它轻事件一样默认不弹窗。
   assert.strictEqual(payload.values.alertStalled, true);
   assert.strictEqual(payload.values.soundStalled, true);
@@ -179,13 +190,27 @@ let snapshot;
   assert.strictEqual(payload.values.popup, true);
   assert.strictEqual(payload.values.soundEnabled, true);
   assert.strictEqual(payload.values.voice, true);
+  // ---- 恢复默认用的 `defaults`（GET /config 追加的字段）-------------------
+  // 键集合必须与 values **完全相同**：前端拿它整体替换页面 values，缺一个键就会 400。
+  assert.ok(payload.defaults && typeof payload.defaults === 'object', '缺 defaults');
+  assert.deepStrictEqual(
+    Object.keys(payload.defaults).sort(),
+    Object.keys(payload.values).sort(),
+    'defaults 的键集合必须与 values 完全相同',
+  );
+  assert.strictEqual(Object.keys(payload.defaults).length, 69, 'defaults 也必须恰好 69 个键');
+  assert.strictEqual(payload.defaults.protocolMode, 'tag-first', 'defaults.protocolMode 必须是 tag-first');
+  assert.strictEqual(payload.defaults.alertStalled, true, 'defaults.alertStalled 必须是 true');
+  assert.strictEqual(payload.defaults.popupStyle, 'topmost', 'defaults.popupStyle 必须是 topmost');
+  assert.strictEqual(payload.defaults.awaitingTestScope, 'all', 'defaults.awaitingTestScope 必须是 all');
   snapshot = payload.values;
   console.log(
-    'GET config ok: wavs=%d (含 %s), voices=%j, values=%d 字段',
+    'GET config ok: wavs=%d (含 %s), voices=%j, values=%d 字段, defaults=%d 字段',
     payload.options.wavs.length,
     payload.options.wavs.includes('Alarm03.wav') ? 'Alarm03.wav' : '??',
     payload.options.voices,
     Object.keys(payload.values).length,
+    Object.keys(payload.defaults).length,
   );
 }
 
@@ -224,6 +249,36 @@ let snapshot;
   );
   assert.strictEqual(res.status, 400, `应 400，实际 ${res.status}`);
   console.log('POST invalid ok: 400');
+}
+
+// ---------------- POST /config：旧布尔 protocolMode 兼容（true / false → 三态枚举）----------------
+{
+  const current = await getConfig();
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', { expected: current.values, values: { ...current.values, protocolMode: true } }),
+    res,
+  );
+  assert.strictEqual(res.status, 200, `应 200，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.values.protocolMode, 'tag-first', '旧的 true 必须归一化为 tag-first');
+  assert.strictEqual(writes.at(-1).values.protocolMode, 'tag-first', '写入磁盘的值必须是 tag-first');
+  console.log('POST protocolMode=true ok: true → tag-first');
+}
+{
+  const current = await getConfig();
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', { expected: current.values, values: { ...current.values, protocolMode: false } }),
+    res,
+  );
+  assert.strictEqual(res.status, 200, `应 200，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.values.protocolMode, 'heuristic-only', '旧的 false 必须归一化为 heuristic-only');
+  assert.strictEqual(writes.at(-1).values.protocolMode, 'heuristic-only', '写入磁盘的值必须是 heuristic-only');
+  // defaults 与当前配置**无关**：此刻磁盘上是 heuristic-only，defaults 仍是 tag-first。
+  assert.strictEqual(payload.defaults.protocolMode, 'tag-first', 'defaults 必须与当前配置无关');
+  console.log('POST protocolMode=false ok: false → heuristic-only（defaults 仍为 tag-first）');
 }
 
 // ---------------- 非 loopback 拒绝 ----------------

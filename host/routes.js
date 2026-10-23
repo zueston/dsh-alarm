@@ -4,7 +4,8 @@
  * 直接网络，唯一合法的桥是**同源 fetch** 打宿主注册在 ctx.webServer 上的路由
  * （与 dsh-switchman / skill-explorer 用的同一套模式）。
  *
- *   GET  /api/dsh-alarm/config  — { values, expected, options: { wavs, voices } }
+ *   GET  /api/dsh-alarm/config  — { values, expected, defaults, options: { wavs, voices } }
+ *                                 （defaults = 所有字段的 FIELDS 默认值，供「恢复默认」整体替换）
  *   POST /api/dsh-alarm/config  — { expected, values } 乐观并发写入 ctx.settings.update
  *   POST /api/dsh-alarm/test    — 立刻触发一次真机提醒（试听/测试按钮）；body 可选
  *                                 { kind, values }：带 values 时按**页面当前勾选**
@@ -124,8 +125,15 @@ const FIELDS = {
 	awaitingTestAnchor: { kind: "string", def: "批次" },
 	awaitingTestQuietSeconds: { kind: "number", def: 0, min: 0, max: 86_400 },
 	awaitingTestSummary: { kind: "bool", def: true },
-	// 严格输出协议：只认正文里独占一行的 [[ALARM:…]] 标签（默认开）。
-	protocolMode: { kind: "bool", def: true },
+	// 严格输出协议（三态）：tag-first=标签优先 + 旧判定兜底（默认）/ tag-only=只认标签 /
+	// heuristic-only=只用旧判定。aliases 兼容**旧布尔配置**（老配置里存的是 true/false）：
+	// 读入时静默改写（true → tag-first、false → heuristic-only），不报错。
+	protocolMode: {
+		kind: "enum",
+		def: "tag-first",
+		values: ["tag-first", "tag-only", "heuristic-only"],
+		aliases: { true: "tag-first", false: "heuristic-only" },
+	},
 	throttleSeconds: { kind: "number", def: 4, min: 0, max: 3600 },
 	askLatchSeconds: { kind: "number", def: 15, min: 0, max: 86_400 },
 };
@@ -328,11 +336,16 @@ function rulesPayload() {
 	}
 }
 
-/** GET /config 的响应体。 */
+/** GET /config 的响应体。
+ *
+ *  `defaults` = `snapshotOf({})`：把**每一个字段**都按 FIELDS 的 def 取一遍（键与 `values`
+ *  完全一致，同一个循环生成），供设置页的「恢复默认」按钮整体替换页面 values。
+ *  **必须与当前配置无关**：传 `{}` 才能拿到纯默认值，传 config 会变成又一份当前快照。 */
 function configPayload(ctx, config) {
 	const values = snapshotOf(config);
+	const defaults = snapshotOf({});
 	const options = { wavs: listWavs(), voices: listVoices(ctx?.logger) };
-	return { values, expected: values, options };
+	return { values, expected: values, defaults, options };
 }
 
 /** 构造 /api/dsh-alarm 路由族（精确路径）。 */

@@ -23,6 +23,14 @@ export const DSH_ALARM_SETTINGS_NS = "dsh-alarm";
  *  旧值兼容（读入时静默改写，见 host/routes.js 的 normalize）：modal → topmost、none → topmost。 */
 export const POPUP_STYLES = ["topmost", "toast"];
 
+/** 严格输出协议（三种模式，三选一；与 host/routes.js 的 FIELDS.protocolMode 一致）：
+ *  tag-first=标签优先（默认）：先认正文里独占一行的 `[[ALARM:…]]` 标签，**标签没命中时仍用旧判定兜底**
+ *  （重启看正文正则、待测看状态文件相位）；
+ *  tag-only=只认标签（旧判定整条关闭）；
+ *  heuristic-only=忽略标签，只走旧判定。
+ *  旧布尔配置兼容：读入时 true → tag-first、false → heuristic-only（见 host/routes.js 的 aliases）。 */
+export const PROTOCOL_MODES = ["tag-first", "tag-only", "heuristic-only"];
+
 /** 待测提醒范围（两种模式，二选一）：
  *  all=每个任务状态文件各自提醒（旧行为）；
  *  anchor=只有路径包含「批次锚点」关键词的状态文件才提醒（合并测试批次：一批任务先开发、
@@ -144,10 +152,12 @@ export const Config = z.object({
 	awaitingTestSummary: z.boolean().default(true).volatile(),
 
 	// ---- 严格输出协议（agent 在正文里独占一行写 [[ALARM:…]] 标签）-----------------
-	/** 只有正文里写了标签才算（默认开）：
-	 *  开 → 「需要重启 DSH」不再看正文正则、「待人工测试」不再看状态文件，只认标签；
-	 *  关 → 两者按旧行为判定，标签仍生效（作为额外通道）。 */
-	protocolMode: z.boolean().default(true).volatile(),
+	/** 协议模式（三态，默认 tag-first）：标签优先 + 旧判定兜底 / 只认标签 / 只用旧判定。
+	 *  tag-first（默认）——「需要重启 DSH」先看 [[ALARM:RESTART]]，没写标签时仍按正文措辞判；
+	 *  「待人工测试」先看 [[ALARM:TEST:任务名]]，没写标签时仍监视状态文件相位（旧判定兜底）。
+	 *  tag-only——两条旧判定整条关闭，只认标签；
+	 *  heuristic-only——忽略标签，只走旧判定。 */
+	protocolMode: z.union(PROTOCOL_MODES).default("tag-first").volatile(),
 
 	/** 同一类提醒的最小间隔（秒）。 */
 	throttleSeconds: z.number().min(0).default(4).volatile(),
