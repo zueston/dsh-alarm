@@ -24,7 +24,9 @@
  * + 两个浮层）/ `showInPlugins`（默认 false，插件页）/ `showInSettings`（默认 false，设置页）。
  * 关掉的那一处**注册体渲染 null**（槽位仍在、卡片不在），三处都订阅模块级配置缓存，
  * 所以勾选后立刻生效、不用重载页面。默认只有主窗口：首次使用时插件页 / 设置页看不到这张卡片。
- * 三个里只剩一个勾选时那个复选框置灰（否则全关 = 这张卡片再无入口，用户把自己锁在外面）。
+ * 三个勾选框**任何时候都可点**（不再置灰）：全关的组合由宿主 `POST /config` 兜底拒绝
+ * （400 `code:"last-slot"`），页面据此把三个 `showIn*` **回滚**到提交前的值并提示一句——
+ * 全关 = 这张卡片再无入口，用户会把自己锁在外面，所以这条规则必须有人拦。
  * 主窗口关掉时两个 `shell.overlay` 弹窗一起不渲染（口径与侧栏入口一致）。
  *
  * 数据全部走宿主路由的**同源 fetch**（受限运行时没有别的网络能力）：
@@ -293,9 +295,6 @@ window.__ModuleLoader__.load({
 			acc[slot.key] = slot.def;
 			return acc;
 		}, {});
-
-		/** 三个里只剩一个勾选时那个复选框的悬停说明：说清为什么点不动（不是坏了）。 */
-		const LAST_SLOT_TITLE = '至少要保留一个入口，否则你再也打不开这个设置页';
 
 		/** 表单分区：每区一张小卡片。`rows` 是条件表（每行 4 个复选框），`fields` 是普通字段行。 */
 		const SECTIONS = [
@@ -620,6 +619,19 @@ window.__ModuleLoader__.load({
 			if (result?.ok !== false) return false;
 			if (result.status !== 400) return false;
 			return String(result.value?.error ?? '').includes('invalid values payload');
+		}
+
+		/** 「三个入口全关」被服务端拒绝时的固定提示（**逐字**由用户给定，别改）。 */
+		const LAST_SLOT_TEXT =
+			'三个入口不能同时关闭：至少要保留一个（主窗口 / 插件页 / 设置页），已恢复上一次的设置。';
+
+		/** 服务端「三个 showIn\* 全 false」的判据：**400 + `code:"last-slot"`**
+		 *  （host/routes.js 的 `SLOT_KEYS` 校验）。与 `isStaleSchemaError` 用的是两个互斥字段
+		 *  （那条只认 `error` 文案里的 `invalid values payload`），所以两条分支不会互相误触发。 */
+		function isLastSlotError(result) {
+			if (result?.ok !== false) return false;
+			if (result.status !== 400) return false;
+			return result.value?.code === 'last-slot';
 		}
 
 		// ------------------------------------------------------------------
@@ -1014,33 +1026,29 @@ window.__ModuleLoader__.load({
 		/** 标题行的三个「注册范围」勾选框（主窗口 / 插件页 / 设置页）。
 		 *
 		 *  - 勾选走卡片现成的 `update()`（勾选即自动保存，400ms 防抖），不另设保存按钮。
-		 *  - **兜底**：三个里只剩一个勾选时，把**那一个**置灰并在 `title` 里说明原因——
-		 *    三个全关就等于「这张设置卡片再也没有入口」，用户会把自己锁死在外面。
+		 *  - **三个框任何时候都可点**（不置灰、不带 `title` 说明）：全关的组合由宿主
+		 *    `POST /config` 兜底拒绝（400 `code:"last-slot"`），再由 `persist()` 回滚 +
+		 *    弹一句提示。用户明确要走「后端拒绝 + 回滚」这条路，别把置灰那条前端口径加回来。
 		 *  - 复选框本身**不加行内样式**（排版全交给外层 label / 外壳 span）。
 		 *
-		 *  ponytail: 兜底只做在界面上（最后一个勾选置灰），挡不住「手改配置文件 / 直接 POST
-		 *  三个 false」这条旁路。天花板：那种情况下三个入口全不渲染，用户只能去改 YAML 或删配置。
-		 *  升级路径：宿主 `GET/POST /config` 里补一条「三个全 false → 回落 showInMain=true」的
-		 *  归一化（与 `protocolMode` 的 `aliases` 同口径），客户端不用再动。用户没要求，先不加。 */
+		 * ponytail: 规则只有一处（服务端），前端不做预防性拦截。天花板：页面在回滚后
+		 *  仍然显示「已恢复上一次的设置」，但若别处同时改过配置，页面上的值可能比磁盘旧一档
+		 *  （`persist()` 的回滚分支会补拉一次配置校正）。升级路径：真要做成「点了就弹窗警告、
+		 *  不提交」，再在上层加确认流程——用户没要求，先不加。 */
 		function renderSlotToggles(values, update) {
-			const checkedCount = SLOT_FIELDS.filter((slot) => values?.[slot.key] === true).length;
-			const items = SLOT_FIELDS.map((slot) => {
-				const checked = values?.[slot.key] === true;
-				const lastOne = checked && checkedCount === 1;
-				return h(
+			const items = SLOT_FIELDS.map((slot) =>
+				h(
 					'label',
 					{ key: slot.key, style: STYLE.slotToggle },
 					h('input', {
 						type: 'checkbox',
 						'aria-label': slot.label,
-						title: lastOne ? LAST_SLOT_TITLE : undefined,
-						disabled: lastOne,
-						checked,
+						checked: values?.[slot.key] === true,
 						onChange: (event) => update(slot.key, event.target.checked),
 					}),
 					slot.label,
-				);
-			});
+				),
+			);
 			return h('span', { style: STYLE.slotToggles }, items);
 		}
 
@@ -1334,6 +1342,13 @@ window.__ModuleLoader__.load({
 			 *  （服务端真返回不了那些键时）变成死循环。缺键集合变了（下次升级）才算新一次。 */
 			const healedFor = useRef('');
 
+			/** 「本次提交之前的快照」（回滚用）：`update()` 里记**第一次未保存改动之前**的
+			 *  values，保存成功 / 冲突重置 / 重新载入 / 回滚之后清空。
+			 *  为什么不用 `valuesToSave`：那是**改完**的页面状态，拿它回滚等于没回滚。
+			 *  拿不到（例如「恢复默认」直接调 `persist()`、或本组件刚挂载）时，
+			 *  回滚分支会回落到 `configCache.values`——上一次成功保存的那份。 */
+			const preSubmitValues = useRef(null);
+
 			/** 清掉还没触发的自动保存。 */
 			const cancelAutoSave = useCallback(() => {
 				if (autoSaveTimer.current !== null) {
@@ -1366,6 +1381,8 @@ window.__ModuleLoader__.load({
 					setError(`读取配置失败：${next.error ?? '未知错误'}`);
 					return false;
 				}
+				// 页面已被磁盘配置整体替换：回滚快照（上一次的本地改动）随之作废。
+				preSubmitValues.current = null;
 				applyValues(next.values ?? null);
 				applyExpected(next.expected ?? next.values ?? null);
 				setOptions(next.options ?? EMPTY_OPTIONS);
@@ -1453,7 +1470,9 @@ window.__ModuleLoader__.load({
 			 *  `mode === 'auto'` 时提示更轻（409 不叫用户再点保存），
 			 *  且**不回写 values**——自动保存返回时用户可能已经在改下一项了。
 			 *  `successText` 是成功态提示语（缺省「已保存」）：只有「恢复默认」需要一句
-			 *  说明这次不是普通保存，免得用户以为只落了某个分区。 */
+			 *  说明这次不是普通保存，免得用户以为只落了某个分区。
+			 *  **两个「非用户过时」的 400 各有自己的处理**：`invalid values payload` → 自愈重载；
+			 *  `code:"last-slot"`（三个入口全关）→ 回滚三个 `showIn*` + 一句提示。 */
 			const persist = useCallback(
 				async (valuesToSave, mode, successText) => {
 					if (valuesToSave === null || valuesToSave === undefined) return;
@@ -1466,6 +1485,8 @@ window.__ModuleLoader__.load({
 					}
 					const result = await api.post('config', { expected: latestExpected.current, values: valuesToSave });
 					if (result.ok) {
+						// 这次提交被服务端接受了：本地改动已成「已保存」，回滚快照作废。
+						preSubmitValues.current = null;
 						const saved = result.value?.values ?? valuesToSave;
 						const savedExpected = result.value?.expected ?? saved;
 						const savedOptions = result.value?.options ?? configCache.options;
@@ -1488,6 +1509,8 @@ window.__ModuleLoader__.load({
 					} else if (result.status === 409) {
 						const fresh = result.value?.values ?? null;
 						if (fresh !== null) {
+							// 页面被磁盘上的新值整体替换了：本地那点改动已被丢弃，回滚快照作废。
+							preSubmitValues.current = null;
 							applyValues(fresh);
 							applyExpected(fresh);
 							// 409 时宿主已经把磁盘上的新值给了我们，缓存也必须跟着换，
@@ -1518,12 +1541,53 @@ window.__ModuleLoader__.load({
 								? STALE_SCHEMA_TEXT
 								: '配置结构已更新（插件刚升级），但重新载入失败，请点「重新载入」后再保存。',
 						});
+					} else if (isLastSlotError(result)) {
+						// **三个入口全关**被服务端拒绝（host/routes.js 的 SLOT_KEYS 校验）：
+						// 这是一次**非法操作**，不是保存失败——页面必须**回滚**到这次改动之前，
+						// 否则界面显示「全关」而磁盘上没变，用户会以为已经生效（然后就再也找不到入口）。
+						// 提示对自动保存也是 `kind:'bad'`：用户的动作不合法，不能当成静默可忽略。
+						//
+						// 只回滚三个 `showIn*`：被拒的是整次 POST，但其它字段并没有惹事，
+						// 顺手把它们也退回去 = 丢掉用户刚改的别的东西（那是另一类事故）。
+						// 快照取 `preSubmitValues`（`update()` 里记的「本次改动之前」）；
+						// 拿不到（本组件刚挂载 / 「恢复默认」直接调进来）就回落到
+						// `configCache.values`——上一次**成功保存**的那份。
+						const before = preSubmitValues.current ?? configCache.values ?? null;
+						const restored = { ...(latestValues.current ?? {}) };
+						for (const slot of SLOT_FIELDS) {
+							if (typeof before?.[slot.key] === 'boolean') restored[slot.key] = before[slot.key];
+						}
+						// 待触发的自动保存带着的正是刚被拒的那份 values，留着只会再 400 一次。
+						cancelAutoSave();
+						preSubmitValues.current = null;
+						applyValues(restored);
+						// **不推进 `expected`**：服务端没写成功、磁盘快照没变；推进了下次 POST
+						// 必然 409（页面的「已保存快照」比磁盘新一档），从此再也存不进去。
+						// 回滚后的页面若与「上次成功保存的那份」不一致（别处也改过配置），
+						// 补拉**一次**配置回来校正（只取那三个键，不覆盖别的未保存改动）。
+						const cached = configCache.values;
+						if (cached !== null && cached !== undefined) {
+							const drift = SLOT_FIELDS.some((slot) => restored[slot.key] !== cached[slot.key]);
+							if (drift) {
+								const refreshed = await refreshConfig(true);
+								if (refreshed.status === 'ok') {
+									const fresh = refreshed.values ?? {};
+									const corrected = { ...latestValues.current };
+									for (const slot of SLOT_FIELDS) {
+										if (typeof fresh[slot.key] === 'boolean') corrected[slot.key] = fresh[slot.key];
+									}
+									applyValues(corrected);
+									applyExpected(refreshed.expected ?? fresh);
+								}
+							}
+						}
+						setStatus({ kind: 'bad', text: LAST_SLOT_TEXT });
 					} else {
 						setStatus({ kind: 'bad', text: `保存失败：${result.value?.error ?? result.status}` });
 					}
 					if (!auto) setBusy('');
 				},
-				[applyExpected, applyValues, load],
+				[applyExpected, applyValues, cancelAutoSave, load],
 			);
 
 			/** 勾选即存：400ms 防抖，连续勾选只发一次 POST。 */
@@ -1538,11 +1602,15 @@ window.__ModuleLoader__.load({
 				[cancelAutoSave, persist],
 			);
 
-			/** 改一项：立刻更新页面状态，并排一次自动保存。 */
+			/** 改一项：立刻更新页面状态，并排一次自动保存。
+			 *  **顺手记回滚快照**：只在快照为空时记（＝这一串未保存改动的**起点**），
+			 *  连点几下不会被最后一下覆盖——回滚要把整串改动退回去，不是只退最后一次。
+			 *  快照在保存成功 / 409 / 重新载入 / 回滚之后清空（见各自的分支）。 */
 			const update = useCallback(
 				(key, next) => {
 					const previous = latestValues.current;
 					if (previous === null) return;
+					if (preSubmitValues.current === null) preSubmitValues.current = previous;
 					const updated = { ...previous, [key]: next };
 					applyValues(updated);
 					scheduleAutoSave(updated);

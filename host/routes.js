@@ -7,6 +7,9 @@
  *   GET  /api/dsh-alarm/config  — { values, expected, defaults, options: { wavs, voices } }
  *                                 （defaults = 所有字段的 FIELDS 默认值，供「恢复默认」整体替换）
  *   POST /api/dsh-alarm/config  — { expected, values } 乐观并发写入 ctx.settings.update
+ *                                 校验顺序：体/值非法 → 400 `invalid values payload`；
+ *                                 **三个 showIn\* 全 false → 400 `code:"last-slot"`**（见 SLOT_KEYS）；
+ *                                 快照过期 → 409 + 新快照
  *   POST /api/dsh-alarm/test    — 立刻触发一次真机提醒（试听/测试按钮）；body 可选
  *                                 { kind, values }：带 values 时按**页面当前勾选**
  *                                 （含未保存改动）响，缺省/非法则回退已保存配置
@@ -143,6 +146,11 @@ const FIELDS = {
 	throttleSeconds: { kind: "number", def: 4, min: 0, max: 3600 },
 	askLatchSeconds: { kind: "number", def: 15, min: 0, max: 86_400 },
 };
+
+/** 「卡片注册范围」的三个开关（标题行那三个勾选框）。**不许同时为 false**：
+ *  全关等于这张设置卡片再无入口（用户把自己锁在外面），由 `POST /config` 兜底 400 拒绝。
+ *  与 client.js 的 `SLOT_FIELDS`、host/config.js 的 schema、lib/alarm.js 的 DEFAULTS 同名。 */
+const SLOT_KEYS = ["showInMain", "showInPlugins", "showInSettings"];
 
 /** JSON 响应助手。 */
 function writeJson(res, status, payload) {
@@ -404,6 +412,16 @@ export function makeRoutes(ctx, config) {
 				const values = coerceValues(body?.values);
 				if (values === null) {
 					writeJson(res, 400, { error: "invalid values payload" });
+					return;
+				}
+				// 三个注册范围（主窗口 / 插件页 / 设置页）**不许同时关掉**：全关 = 这张设置卡片
+				// 再无任何入口，只能去手改配置才能救回来。校验放在服务端（唯一兜底）：
+				// 前端那层「最后一个勾选置灰」已按用户要求去掉，改由这里拒绝 + 页面回滚。
+				if (SLOT_KEYS.every((key) => values[key] !== true)) {
+					writeJson(res, 400, {
+						error: "至少要保留一个入口（主窗口 / 插件页 / 设置页），否则你将再也打不开这个设置页",
+						code: "last-slot",
+					});
 					return;
 				}
 				// 乐观并发：客户端提交它加载时的快照，若已变化则 409 + 新快照。

@@ -9,6 +9,8 @@
  *   - 设置字段总数 **72**；`GET config` 的 `defaults` 键集合与 `values` 完全相同（「恢复默认」用），
  *     且协议模式是**两态**：`defaults.protocolMode === 'tag-first'`，旧布尔 `protocolMode: true/false`
  *     与已删除的第三态 `'heuristic-only'` 提交时一律归一化为 `tag-first`、`'tag-only'` 原样保留；
+ *   - **`POST config` 的三个注册范围（`showInMain`/`showInPlugins`/`showInSettings`）不许同时为 false**：
+ *     全关 → 400 `code:"last-slot"` 且不落盘，只关掉其中一个 → 200；
  *     `GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
  *     里第一个 ```text 围栏块的字符数；
  *   - `lib/alarm.js` 的 `parseAlarmTags`（严格输出协议）：6 个标签各一条 + 行内出现不匹配
@@ -263,6 +265,53 @@ let snapshot;
   );
   assert.strictEqual(res.status, 400, `应 400，实际 ${res.status}`);
   console.log('POST invalid ok: 400');
+}
+
+// ---------------- POST /config：三个注册范围全 false → 400 code:"last-slot" ----------------
+// 用户口径：三个入口（主窗口 / 插件页 / 设置页）**不许同时关掉**——全关 = 这张设置卡片再无
+// 任何入口，只能去手改配置才能救回来。校验是**服务端的唯一兜底**（前端那层「最后一个勾选
+// 置灰」已按用户要求去掉，改成「后端拒绝 + 页面回滚 + 提示」）。
+{
+  const current = await getConfig();
+  const writesBefore = writes.length;
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', {
+      expected: current.values,
+      values: { ...current.values, showInMain: false, showInPlugins: false, showInSettings: false },
+    }),
+    res,
+  );
+  assert.strictEqual(res.status, 400, `三个全关应 400，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.code, 'last-slot', 'code 必须是 last-slot（前端据此回滚）');
+  assert.strictEqual(
+    payload.error,
+    '至少要保留一个入口（主窗口 / 插件页 / 设置页），否则你将再也打不开这个设置页',
+    'error 文案必须逐字一致（前端另一句提示走的是自己那份常量）',
+  );
+  assert.strictEqual(writes.length, writesBefore, '被拒绝的提交绝不能落盘');
+  console.log('POST 三个注册范围全关 ok: 400 code=%s 且未落盘', payload.code);
+}
+
+// 紧接着一个**合法**组合（只留插件页）必须 200：拒绝的是「全关」，不是「关掉某一个」。
+{
+  const current = await getConfig();
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/config'].handler(
+    makeReq('POST', {
+      expected: current.values,
+      values: { ...current.values, showInMain: false, showInPlugins: true, showInSettings: false },
+    }),
+    res,
+  );
+  assert.strictEqual(res.status, 200, `只留插件页应 200，实际 ${res.status}: ${res.body}`);
+  const payload = JSON.parse(res.body);
+  assert.strictEqual(payload.values.showInMain, false);
+  assert.strictEqual(payload.values.showInPlugins, true);
+  assert.strictEqual(payload.values.showInSettings, false);
+  assert.strictEqual(writes.at(-1).values.showInPlugins, true, '写入磁盘的值必须就是这次提交的值');
+  console.log('POST 只留插件页 ok: 200 showInMain=false showInPlugins=true');
 }
 
 // ---------------- POST /config：协议模式 = 两态 + 历史值全归一化到 tag-first ----------------
