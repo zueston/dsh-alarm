@@ -62,39 +62,37 @@
 
   .head-title { font-size: 15.5px; font-weight: 600; letter-spacing: .2px; white-space: nowrap; }
 
-  .slots { display: inline-flex; align-items: center; gap: 6px; margin-left: 2px; }
+  /* 注册范围：标题后面一行「注册到：☑主窗口 ☐插件页 ☐设置页」 */
+  .slots {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    margin-left: 6px;
+  }
+
+  .slots-prefix {
+    font-size: 12.5px;
+    color: var(--label-2);
+  }
 
   .slot {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 10px 4px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: var(--fill);
-    font-size: 12px;
+    gap: 6px;
+    font-size: 12.5px;
     line-height: 1;
-    font-weight: 600;
-    color: var(--label-2);
+    color: var(--label);
     cursor: pointer;
-    transition: background .18s, border-color .18s, color .18s;
     user-select: none;
   }
 
-  .slot:hover { border-color: var(--line-strong); color: var(--label); }
-  .slot input { display: none; }
-
-  .slot .dot {
-    width: 12px; height: 12px; border-radius: 999px;
-    border: 1.5px solid var(--line-strong);
-    display: inline-block; position: relative;
-    transition: background .18s, border-color .18s;
+  .slot input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--brand);
+    cursor: pointer;
   }
-
-  .slot input:checked + .dot { background: var(--brand); border-color: var(--brand); }
-  .slot input:checked + .dot::after { content: ""; position: absolute; inset: 3px; border-radius: 999px; background: #fff; }
-  .slot:has(input:checked) { background: rgba(77, 107, 254, .10); border-color: rgba(77, 107, 254, .38); }
-  .slot:has(input:checked) .slot-label { color: var(--label); }
 
   .head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
@@ -185,6 +183,8 @@
     color: var(--label-2);
     line-height: 16px;
     text-align: center;
+    /* 条件 / 播报文本 与 四个总开关标签同处一行，垂直居中对齐 */
+    align-items: center;
   }
   .thead .th-label { text-align: left; }
   .thead .th-voice { text-align: left; }
@@ -277,9 +277,10 @@
     <span class="head-title">报警提醒</span>
 
     <div class="slots">
-      <label class="slot"><input type="checkbox" checked /><span class="dot"></span><span class="slot-label">主窗口</span></label>
-      <label class="slot"><input type="checkbox" /><span class="dot"></span><span class="slot-label">插件页</span></label>
-      <label class="slot"><input type="checkbox" /><span class="dot"></span><span class="slot-label">设置页</span></label>
+      <span class="slots-prefix">注册到：</span>
+      <label class="slot"><input type="checkbox" checked /><span>主窗口</span></label>
+      <label class="slot"><input type="checkbox" /><span>插件页</span></label>
+      <label class="slot"><input type="checkbox" /><span>设置页</span></label>
     </div>
 
     <div class="head-actions">
@@ -371,6 +372,45 @@
             <span class="field-help">响时正文列出当前所有待测任务名。</span>
           </div>
           <label class="switch" style="justify-content:flex-start"><input type="checkbox" checked /><span class="track"></span></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head"><span class="section-title">铃声</span></div>
+      <div class="card">
+        <div class="field">
+          <div>
+            <div class="field-label">铃声</div>
+            <span class="field-help">系统自带铃声（C:\Windows\Media\*.wav）或自定义 .wav 文件。</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <select class="select">
+              <option>Alarm03.wav（系统）</option>
+              <option>Alarm01.wav（系统）</option>
+              <option>Alarm02.wav（系统）</option>
+              <option>Ring01.wav（系统）</option>
+              <option>chimes.wav（系统）</option>
+              <option>notify.wav（系统）</option>
+              <option value="__custom__">自定义文件…</option>
+            </select>
+
+            <!-- 选「自定义文件…」后展开：可手填路径，也可点「浏览…」选文件 -->
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="input" placeholder="自定义铃声路径，例如 D:\sounds\my-alarm.wav" />
+              <button class="btn" style="flex:0 0 auto">浏览…</button>
+              <button class="btn" style="flex:0 0 auto">▶ 试听</button>
+            </div>
+            <span class="field-help">只支持 .wav；文件不存在或读不到时会自动退回系统提示音。</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <div>
+            <div class="field-label">重复次数</div>
+            <span class="field-help">1–5 次，间隔 0.25 秒。</span>
+          </div>
+          <div class="num-row"><input class="input" type="number" value="1" min="1" max="5" /><span class="unit">次</span></div>
         </div>
       </div>
     </div>
