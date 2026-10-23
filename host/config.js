@@ -23,6 +23,12 @@ export const DSH_ALARM_SETTINGS_NS = "dsh-alarm";
  *  旧值兼容（读入时静默改写，见 host/routes.js 的 normalize）：modal → topmost、none → topmost。 */
 export const POPUP_STYLES = ["topmost", "toast"];
 
+/** 待测提醒范围（两种模式，二选一）：
+ *  all=每个任务状态文件各自提醒（旧行为）；
+ *  anchor=只有路径包含「批次锚点」关键词的状态文件才提醒（合并测试批次：一批任务先开发、
+ *  最后一起实测时，只由带锚点的那一个包负责响）。 */
+export const AWAITING_TEST_SCOPES = ["all", "anchor"];
+
 export const Config = z.object({
 	/** 报警总开关（关掉后任何条件都不响）。 */
 	enabled: z.boolean().default(true).volatile(),
@@ -36,8 +42,8 @@ export const Config = z.object({
 	alertTurnEnd: z.boolean().default(false).volatile(),
 	/** 本轮被手动打断（abort / interrupt / cancel / stop）时提醒（默认关）。 */
 	alertTurnInterrupt: z.boolean().default(false).volatile(),
-	/** 一轮异常报错（reason 不属于中断类）时提醒（默认关）。 */
-	alertTurnError: z.boolean().default(false).volatile(),
+	/** 一轮异常报错（reason 不属于中断类）时提醒（默认开：报错多半要人看一眼）。 */
+	alertTurnError: z.boolean().default(true).volatile(),
 	/** 设置页「测试提醒」按钮是否真的响铃（默认开）。 */
 	alertTest: z.boolean().default(true).volatile(),
 	/** 任务包被推进到「待人工测试」时提醒（状态.md 的「当前阶段」真的从别的值变成它时才响）。 */
@@ -118,6 +124,17 @@ export const Config = z.object({
 	voiceTurnInterrupt: z.boolean().default(true).volatile(),
 	voiceTurnError: z.boolean().default(true).volatile(),
 	voiceTest: z.boolean().default(true).volatile(),
+
+	// ---- 「待人工测试」提醒的批次/聚合规则（合并测试批次用）-----------------
+	// 四个字段必须扁平 volatile（不做嵌套对象）：设置页按扁平键读写，嵌套会读不到。
+	/** 待测提醒范围：all=每个任务各自提醒 / anchor=只有路径含锚点关键词的状态文件才提醒。 */
+	awaitingTestScope: z.union(AWAITING_TEST_SCOPES).default("all").volatile(),
+	/** 批次锚点关键词（子串匹配、不区分大小写），例如 批次 或 P-U2。 */
+	awaitingTestAnchor: z.string().default("批次").volatile(),
+	/** 待测提醒聚合窗口（秒）：0=每个任务各自提醒；>0=窗口内只响第一次，其余累积到窗口结束汇总。 */
+	awaitingTestQuietSeconds: z.number().min(0).default(0).volatile(),
+	/** 响的时候正文是否附「还有 N 个任务待测」清单。 */
+	awaitingTestSummary: z.boolean().default(true).volatile(),
 
 	/** 同一类提醒的最小间隔（秒）。 */
 	throttleSeconds: z.number().min(0).default(4).volatile(),

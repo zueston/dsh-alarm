@@ -5,13 +5,15 @@
  * 入口写法：
  *   window.__ModuleLoader__.load({ id, factory(require) { ... return { inject, apply } } })
  *
- * 注册的槽位（恰好四个，**不注册 main**）：
+ * 注册的槽位（恰好五个，**不注册 main**）：
  *   1. sidebar.panellist       —— 主窗口侧边栏「报警提醒」铃铛入口（order 33）。
  *      点它只开浮层，不切主区域。
  *   2. shell.overlay           —— 设置弹窗本体（宿主官方浮层槽位，order 120）。
  *      **不再用 portal 挂 body**：那条路一弹窗就白屏，改成槽位后稳定。
  *   3. settings.section        —— 设置页里的一张「报警提醒（dsh-alarm）」卡片
  *   4. plugins.bundle.config   —— 「插件」页里同一个组件的第二入口
+ *   5. shell.overlay（第二个） —— 「编辑报警规则」弹窗（order 121，与设置弹窗并列）。
+ *      它是**独立的一条注册**，不并进设置弹窗：规则块只是「看 + 复制」，不需要配置读写。
  *  **绝不注册 `main` 槽位**：注册了就等于把「报警提醒」变成宿主可选的中间面板，
  *  一选中主区域就渲染成空——用户实测的「点铃铛后会话界面白屏」就是这么来的。
  *  宿主浮层类插件同理，只应注册 sidebar.panellist + shell.overlay 这两个槽位。
@@ -22,6 +24,7 @@
  *   GET  api/dsh-alarm/config  { values, expected, options: { wavs, voices } }
  *   POST api/dsh-alarm/config  { expected, values }
  *   POST api/dsh-alarm/test    { kind, values }  （按页面当前勾选试听：连未保存的改动一起发）
+ *   GET  api/dsh-alarm/agent-rules { ok, text, source, missing }  （「编辑报警规则」弹窗的只读正文）
  *
  * 勾选即自动保存（400ms 防抖）：改完就落盘，不再有「勾了但没点保存」的状态；
  * 底部「保存」按钮保留为手动重试入口，「重新载入」丢弃本地改动回到磁盘配置。
@@ -290,7 +293,7 @@ window.__ModuleLoader__.load({
 						sound: 'soundTurnError',
 						voice: 'voiceTurnError',
 						label: '本轮报错时提醒（异常结束）',
-						help: '默认关闭。',
+						help: '默认打开。',
 					},
 					{
 						kind: 'test',
@@ -300,6 +303,46 @@ window.__ModuleLoader__.load({
 						voice: 'voiceTest',
 						label: '手工测试提醒',
 						help: '默认开启；取消后这一行的 ▶ 试听也不会响。',
+					},
+				],
+			},
+			{
+				id: 'batch',
+				title: '批量测试协调',
+				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。',
+				fields: [
+					{
+						key: 'awaitingTestScope',
+						type: 'select',
+						label: '待测提醒范围',
+						options: [
+							{ value: 'all', label: '全部任务各自提醒' },
+							{ value: 'anchor', label: '只提醒路径含锚点的那个状态文件' },
+						],
+						fallback: 'all',
+						help: '全部任务各自提醒 / 只提醒路径含「批次锚点」的那个状态文件（配合合并测试批次）',
+					},
+					{
+						key: 'awaitingTestAnchor',
+						type: 'text',
+						label: '批次锚点关键词',
+						help: '状态文件路径里包含该片段才会提醒（不区分大小写），例如 批次、P-U2',
+					},
+					{
+						key: 'awaitingTestQuietSeconds',
+						type: 'number',
+						label: '待测提醒聚合窗口（秒）',
+						min: 0,
+						max: 86400,
+						step: 1,
+						suffix: '秒',
+						help: '0 = 每个任务各自提醒；>0 = 窗口内只响第一次，其余累积到窗口结束汇总成一条',
+					},
+					{
+						key: 'awaitingTestSummary',
+						type: 'bool',
+						label: '汇总附待测清单',
+						help: '响时正文列出当前所有待测任务名',
 					},
 				],
 			},
@@ -1099,11 +1142,26 @@ window.__ModuleLoader__.load({
 			const headerRow = h(
 				'div',
 				{ style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: '0 0 auto', marginTop: 0, marginBottom: 10, background: COLORS.bg, paddingTop: 10, paddingBottom: 10, borderBottom: `1px solid ${COLORS.border}` } },
-				// 标题在最左，`marginRight:'auto'` 把右边三个按钮（重新载入 / 保存 / ❌）整组推到行尾。
+				// 标题在最左，`marginRight:'auto'` 把右边那组按钮（编辑报警规则 / 重新载入 / 保存 / ❌）
+				// 整组推到行尾。
 				h(
 					'span',
 					{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text, marginRight: 'auto' } },
 					'报警提醒',
+				),
+				// 「编辑报警规则」放在「重新载入」**之前**（用户指定的位置）：它只是「看 + 复制」
+				// 规则的入口，不改配置；后面才是重新载入 / 保存 / ❌ 这组改配置的按钮。
+				// 四个入口（浮层弹窗 / 设置页 / 插件页 / 侧栏）都渲染同一张卡片，所以都会出现它。
+				h(
+					'button',
+					{
+						type: 'button',
+						style: STYLE.button,
+						title: '编辑报警规则',
+						'aria-label': '编辑报警规则',
+						onClick: () => setRulesDialogOpen(true),
+					},
+					'编辑报警规则',
 				),
 				h('button', { type: 'button', style: STYLE.button, disabled: busy !== '', onClick: load }, '重新载入'),
 				h('button', { type: 'button', style: STYLE.primary, disabled: busy !== '', onClick: save }, busy === 'save' ? '保存中…' : '保存'),
@@ -1273,6 +1331,39 @@ window.__ModuleLoader__.load({
 			return isOpen;
 		}
 
+		/** 「编辑报警规则」弹窗的模块级标志 + 订阅：**与 `iconDialogOpen` 完全并列的另一套**。
+		 *
+		 *  为什么不复用上面那套：两个弹窗是**独立开关**（规则块可能在四个入口的任意一处打开，
+		 *  关闭时也不该把侧栏那套设置浮层的状态一起改掉）。两套各自一份订阅，
+		 *  互不干扰；`iconDialogOpen` 那一套一个字都没动。 */
+		let rulesDialogOpen = false;
+		const rulesDialogListeners = new Set();
+
+		function setRulesDialogOpen(next) {
+			const value = next === true;
+			if (rulesDialogOpen === value) return;
+			rulesDialogOpen = value;
+			for (const listener of [...rulesDialogListeners]) {
+				try {
+					listener(value);
+				} catch {}
+			}
+		}
+
+		/** 订阅「编辑报警规则」标志：返回当前值，变化时触发一次重渲染。 */
+		function useRulesDialogOpen() {
+			const [isOpen, setIsOpen] = React.useState(rulesDialogOpen);
+			React.useEffect(() => {
+				rulesDialogListeners.add(setIsOpen);
+				// 首帧与订阅之间若有变化，补一次，别留下空窗。
+				if (isOpen !== rulesDialogOpen) setIsOpen(rulesDialogOpen);
+				return () => {
+					rulesDialogListeners.delete(setIsOpen);
+				};
+			}, []);
+			return isOpen;
+		}
+
 		/** 侧边栏图标（一支小铃铛）：**整行可点**，弹设置浮层，不切走主界面。
 		 *
 		 *  这里**只置标志**、不渲染弹窗：浮层统一由 `shell.overlay` 槽位负责
@@ -1390,6 +1481,275 @@ window.__ModuleLoader__.load({
 			return h(AlarmDialog, { onRequestClose });
 		}
 
+		/** 「编辑报警规则」弹窗：一个只读的规则块 + 一键复制。
+		 *
+		 *  正文来自宿主只读路由 `GET api/dsh-alarm/agent-rules`（唯一起源是插件自带的
+		 *  `docs/agent-output-prompt.md` 里第一个 ```text 块）——**前端不内联任何规则文本**，
+		 *  否则文档一改界面就撒谎。
+		 *  视觉沿用 `AlarmDialog`：同一套遮罩 / 居中卡片 / 卡片内不滚（滚的是 textarea）。
+		 *  关闭：Esc / 点 ❌ / 点遮罩；点卡片内部 stopPropagation 不关。 */
+		function RulesDialog({ onRequestClose }) {
+			const { useState, useEffect, useRef, useCallback } = React;
+			/** 规则正文 / 文件缺失 / 读取失败 / 复制反馈（idle | copied | failed）。 */
+			const [text, setText] = useState('');
+			const [missing, setMissing] = useState(false);
+			const [error, setError] = useState(null);
+			const [copyState, setCopyState] = useState('idle');
+			/** 「重新载入」用：递增即重新拉一次（作为拉取 effect 的依赖）。 */
+			const [reloadSeq, setReloadSeq] = useState(0);
+			const textareaRef = useRef(null);
+			/** 「已复制」1.5 秒后回落的定时器句柄（卸载时清掉）。 */
+			const copyTimer = useRef(null);
+
+			/** 拉规则块：打开时自动拉一次；点「重新载入」再拉。 */
+			useEffect(() => {
+				let alive = true;
+				setError(null);
+				void (async () => {
+					const result = await api.get('agent-rules');
+					// 关掉弹窗/卸载后回来的响应直接丢掉，别给已卸载组件 setState。
+					if (!alive) return;
+					if (!result.ok) {
+						setError(`读取规则失败：${result.value?.error ?? result.status}`);
+						return;
+					}
+					if (result.value?.missing === true) {
+						setMissing(true);
+						setText('');
+						return;
+					}
+					setMissing(false);
+					setText(String(result.value?.text ?? ''));
+				})();
+				return () => {
+					alive = false;
+				};
+			}, [reloadSeq]);
+
+			/** 卸载时清掉「已复制」定时器（组件没了还改状态会打印告警）。 */
+			useEffect(
+				() => () => {
+					if (copyTimer.current !== null) {
+						clearTimeout(copyTimer.current);
+						copyTimer.current = null;
+					}
+				},
+				[],
+			);
+
+			/** 一键复制：优先 Clipboard API；不可用/被拒时回退「选中 textarea + execCommand('copy')」。
+			 *  受限 webview 或非安全上下文里 Clipboard API 常常不存在，这条回退是必需的。 */
+			const copy = useCallback(async () => {
+				const value = String(textareaRef.current?.value ?? text ?? '');
+				let done = false;
+				try {
+					const clipboard = typeof navigator === 'undefined' ? undefined : navigator?.clipboard;
+					if (clipboard !== undefined && clipboard !== null && typeof clipboard.writeText === 'function') {
+						await clipboard.writeText(value);
+						done = true;
+					}
+				} catch {
+					done = false;
+				}
+				if (!done) {
+					try {
+						const node = textareaRef.current;
+						node?.focus?.();
+						node?.select?.();
+						node?.setSelectionRange?.(0, value.length);
+						done = typeof document !== 'undefined' && document.execCommand?.('copy') === true;
+					} catch {
+						done = false;
+					}
+				}
+				if (copyTimer.current !== null) {
+					clearTimeout(copyTimer.current);
+					copyTimer.current = null;
+				}
+				if (done) {
+					setCopyState('copied');
+					copyTimer.current = setTimeout(() => {
+						copyTimer.current = null;
+						setCopyState('idle');
+					}, 1500);
+				} else {
+					setCopyState('failed');
+				}
+			}, [text]);
+
+			/** Esc 关闭：只在弹窗挂着时监听，卸载时移除。 */
+			useEffect(() => {
+				if (typeof document === 'undefined') return undefined;
+				const onKeyDown = (event) => {
+					if (event?.key === 'Escape' || event?.key === 'Esc') {
+						event.preventDefault?.();
+						onRequestClose?.();
+					}
+				};
+				document.addEventListener('keydown', onKeyDown);
+				return () => document.removeEventListener('keydown', onKeyDown);
+			}, [onRequestClose]);
+
+			const hints = [];
+			if (missing) {
+				hints.push(
+					h(
+						'div',
+						{ key: 'missing', style: { fontSize: 12, color: COLORS.bad, marginBottom: 6 } },
+						'规则文件缺失（docs/agent-output-prompt.md），请检查插件完整性',
+					),
+				);
+			}
+			if (error !== null) {
+				hints.push(
+					h(
+						'div',
+						{
+							key: 'error',
+							style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: COLORS.bad, marginBottom: 6 },
+						},
+						h('span', null, error),
+						h(
+							'button',
+							{ type: 'button', style: STYLE.auditionButton, onClick: () => setReloadSeq((seq) => seq + 1) },
+							'重新载入',
+						),
+					),
+				);
+			}
+			if (copyState === 'failed') {
+				hints.push(
+					h(
+						'div',
+						{ key: 'copy-failed', style: { fontSize: 12, color: COLORS.bad, marginBottom: 6 } },
+						'复制失败，请手动全选复制',
+					),
+				);
+			}
+
+			return h(
+				'div',
+				{
+					// 遮罩：点空白处关闭（卡片上的 onClick 会 stopPropagation 拦下）。
+					style: {
+						position: 'fixed',
+						inset: 0,
+						background: 'rgba(0,0,0,0.35)',
+						display: 'flex',
+						alignItems: 'center',
+						justifyContent: 'center',
+						zIndex: 9999,
+					},
+					onClick: onRequestClose,
+				},
+				h(
+					'div',
+					{
+						role: 'dialog',
+						'aria-modal': true,
+						'aria-label': '编辑报警规则',
+						// 点卡片内部不关闭。
+						onClick: (event) => event?.stopPropagation?.(),
+						style: {
+							boxSizing: 'border-box',
+							maxWidth: '900px',
+							width: 'calc(100vw - 48px)',
+							maxHeight: '86vh',
+							overflow: 'hidden',
+							display: 'flex',
+							flexDirection: 'column',
+							border: `1px solid ${COLORS.border}`,
+							borderRadius: 12,
+							background: COLORS.bg,
+							color: COLORS.text,
+							boxShadow: '0 18px 48px rgba(0,0,0,0.32)',
+							padding: '14px 18px 18px',
+						},
+					},
+					// 头部：标题 + 一键复制 + ❌。
+					h(
+						'div',
+						{
+							style: {
+								display: 'flex',
+								alignItems: 'center',
+								gap: 10,
+								flex: '0 0 auto',
+								marginBottom: 10,
+								paddingBottom: 10,
+								borderBottom: `1px solid ${COLORS.border}`,
+							},
+						},
+						h(
+							'span',
+							{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text, marginRight: 'auto' } },
+							'编辑报警规则',
+						),
+						h(
+							'button',
+							{
+								type: 'button',
+								style: STYLE.button,
+								title: '一键复制',
+								'aria-label': '一键复制',
+								onClick: () => {
+									void copy();
+								},
+							},
+							copyState === 'copied' ? '已复制' : '一键复制',
+						),
+						h(
+							'button',
+							{
+								type: 'button',
+								style: STYLE.button,
+								title: '关闭',
+								'aria-label': '关闭报警规则',
+								onClick: onRequestClose,
+							},
+							'❌',
+						),
+					),
+					hints.length > 0 ? h('div', { style: { flex: '0 0 auto' } }, hints) : null,
+					// 正文：只读 textarea（可纵向拉伸；规则块里的换行原样保留）。
+					h('textarea', {
+						ref: textareaRef,
+						readOnly: true,
+						spellCheck: false,
+						'aria-label': '报警规则',
+						value: text,
+						style: {
+							flex: '1 1 auto',
+							minHeight: 0,
+							width: '100%',
+							boxSizing: 'border-box',
+							resize: 'vertical',
+							fontFamily: 'ui-monospace,Consolas,monospace',
+							fontSize: 12.5,
+							lineHeight: '18px',
+							padding: '10px 12px',
+							borderRadius: 8,
+							border: `1px solid ${COLORS.border}`,
+							background: COLORS.field,
+							color: COLORS.text,
+						},
+					}),
+				),
+			);
+		}
+
+		/** 「编辑报警规则」弹窗层：`shell.overlay` 的**第二个**注册（与设置弹窗并列）。
+		 *
+		 *  只订阅 `useRulesDialogOpen()`：关着直接不渲染任何东西——宿主槽位永远挂着，
+		 *  但不能在关着的时候留一层空遮罩挡住整页。
+		 *  关闭**只置标志**，不调 `ctx.layout.selectPanel`：本弹窗不切主区域
+		 *  （设置浮层那条路径才需要把主区域拉回会话）。 */
+		function RulesDialogLayer() {
+			const isOpen = useRulesDialogOpen();
+			if (!isOpen) return null;
+			return h(RulesDialog, { onRequestClose: () => setRulesDialogOpen(false) });
+		}
+
 		return {
 			inject: ['slots'],
 			apply(ctx) {
@@ -1422,6 +1782,20 @@ window.__ModuleLoader__.load({
 							label: () => '报警提醒设置',
 						},
 						guarded('shell.overlay', () => h(AlarmDialogLayer, { ctx })),
+					),
+				);
+				// 「编辑报警规则」弹窗：**与上面并列的第二条 shell.overlay 注册**（不合并进设置弹窗）。
+				// order 121 = 紧跟在设置弹窗（120）之后；两条各自订阅自己的标志，互不影响。
+				// 同样过 guarded()：错误边界已被证明能防白屏（见文件头的说明）。
+				ctx.slots.inject('shell.overlay', () =>
+					ctx.slots.register(
+						{
+							name: 'shell.overlay',
+							id: `${NS}.rules-dialog`,
+							order: 121,
+							label: () => '报警规则',
+						},
+						guarded('shell.overlay:rules', () => h(RulesDialogLayer, {})),
 					),
 				);
 				ctx.slots.inject('settings.section', () =>

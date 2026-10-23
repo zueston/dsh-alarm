@@ -9,12 +9,15 @@
  *   POST /api/dsh-alarm/test    — 立刻触发一次真机提醒（试听/测试按钮）；body 可选
  *                                 { kind, values }：带 values 时按**页面当前勾选**
  *                                 （含未保存改动）响，缺省/非法则回退已保存配置
+ *   GET  /api/dsh-alarm/agent-rules — { ok, text, source, missing }：`docs/agent-output-prompt.md`
+ *                                 里第一个 ```text 围栏块（可一键复制粘给 agent 的规则块）。
+ *                                 **只读**；文件读不到也回 200 + missing:true。
  *   GET  /api/dsh-alarm/health  — 存活探针
  *
  * 信任边界：loopback（Host 头 + Origin/Sec-Fetch-Site 校验）或已配对的远程 UI
  * 设备；设置写会落盘，未配对的局域网客户端一律拒绝。
  */
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { DSH_ALARM_SETTINGS_NS } from "./config.js";
@@ -26,7 +29,16 @@ const ROUTES = {
 	health: "/api/dsh-alarm/health",
 	config: "/api/dsh-alarm/config",
 	test: "/api/dsh-alarm/test",
+	agentRules: "/api/dsh-alarm/agent-rules",
 };
+
+/** 「报警规则块」的唯一来源：插件自带的说明文档。
+ *
+ *  路径**按本模块自身位置解析**（`import.meta.url` 是 host/routes.js，向上一级即插件根），
+ *  绝不写死绝对路径：插件被装到哪个目录、是否被复制到临时目录都无所谓。
+ *  内容侧只读一次、不外传：本路由没有任何写操作，也不接受参数。 */
+const RULES_FILE = new URL("../docs/agent-output-prompt.md", import.meta.url);
+const RULES_SOURCE = "docs/agent-output-prompt.md";
 
 /** 设置命名空间：cordis.patch.yml 里的 loader 行 id（`- id: dsh-alarm`），
  *  不是插件的 name —— dsh-settings 的 write() 按 entry.options.id 查找条目。 */
@@ -40,7 +52,7 @@ const FIELDS = {
 	alertTaskComplete: { kind: "bool", def: true },
 	alertTurnEnd: { kind: "bool", def: false },
 	alertTurnInterrupt: { kind: "bool", def: false },
-	alertTurnError: { kind: "bool", def: false },
+	alertTurnError: { kind: "bool", def: true },
 	alertTest: { kind: "bool", def: true },
 	alertAwaitingTest: { kind: "bool", def: true },
 	alertRestart: { kind: "bool", def: true },
@@ -101,6 +113,12 @@ const FIELDS = {
 	voiceTurnInterrupt: { kind: "bool", def: true },
 	voiceTurnError: { kind: "bool", def: true },
 	voiceTest: { kind: "bool", def: true },
+	// 「待人工测试」提醒的批次/聚合规则（合并测试批次：一批任务只响一次、响时带待测清单）。
+	// 四个字段都是扁平字段（不做嵌套对象，否则设置页读不到）。
+	awaitingTestScope: { kind: "enum", def: "all", values: ["all", "anchor"] },
+	awaitingTestAnchor: { kind: "string", def: "批次" },
+	awaitingTestQuietSeconds: { kind: "number", def: 0, min: 0, max: 86_400 },
+	awaitingTestSummary: { kind: "bool", def: true },
 	throttleSeconds: { kind: "number", def: 4, min: 0, max: 3600 },
 	askLatchSeconds: { kind: "number", def: 15, min: 0, max: 86_400 },
 };
@@ -260,6 +278,49 @@ function listVoices(logger) {
 	return listInstalledVoices(logger);
 }
 
+/** 从 markdown 里取出**第一个** ```text 围栏块的正文。
+ *
+ *  - 只取第一个 ```text 到它的**收尾围栏**之间的内容；块内换行原样保留（前端要**逐字**复制）。
+ *  - 只去掉块首、块尾的空行（对齐「去掉首尾空行」，不做 trim 其余空白）。
+ *  - **收尾围栏按 CommonMark 判：必须独占一行**（行首 ``` 起头）。不能拿「正文里出现的第一个
+ *    三个反引号」当收尾——docs/agent-output-prompt.md 的 R1 那句里就有一个行内的 ```...```
+ *    （「围栏代码块内的文字一律不算」），按字符位置截会只截到那一行，规则块少掉九成内容。
+ *  - 找不到围栏/围栏没闭合 → 回退整份文件，并把 source 标成「整文件」，让前端能看出降级。
+ */
+function extractRulesBlock(raw) {
+	const full = String(raw ?? "");
+	const lines = full.split("\n");
+	const open = lines.findIndex((line) => line.trimStart().startsWith("```text"));
+	if (open < 0) return { text: full.trim(), source: `${RULES_SOURCE}（整文件）` };
+	let close = -1;
+	for (let i = open + 1; i < lines.length; i += 1) {
+		if (lines[i].trimStart().startsWith("```")) {
+			close = i;
+			break;
+		}
+	}
+	if (close < 0) return { text: full.trim(), source: `${RULES_SOURCE}（整文件）` };
+	// 按行切片再拼回去：**块内每一行的原样内容（含行尾 \r）都保留**，只砍首尾空行。
+	const block = lines.slice(open + 1, close);
+	while (block.length > 0 && block[0].trim() === "") block.shift();
+	while (block.length > 0 && block[block.length - 1].trim() === "") block.pop();
+	return { text: block.join("\n"), source: RULES_SOURCE };
+}
+
+/** GET /agent-rules 的响应体。
+ *
+ *  读文件失败（文件缺失、权限、编码）**仍然 200 + missing:true**：这是「插件不完整」的
+ *  提示态，不是请求错误——前端据此显示「规则文件缺失」而不是一条红色报错。
+ *  `ok` 恒为 true：前端只要拿到 JSON 就说明路由通了。 */
+function rulesPayload() {
+	try {
+		const { text, source } = extractRulesBlock(readFileSync(RULES_FILE, "utf8"));
+		return { ok: true, text, source, missing: false };
+	} catch (error) {
+		return { ok: true, text: "", source: RULES_SOURCE, missing: true, error: String(error?.message ?? error) };
+	}
+}
+
 /** GET /config 的响应体。 */
 function configPayload(ctx, config) {
 	const values = snapshotOf(config);
@@ -397,6 +458,16 @@ export function makeRoutes(ctx, config) {
 					ctx.logger?.warn?.(`dsh-alarm: 测试提醒失败：${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
+			},
+		},
+		{
+			// 只读：把插件自带的「报警规则块」交给前端弹窗（一键复制 → 粘给 agent）。
+			// 与其它路由同一道信任边界（loopback / 已配对设备）+ 只允许 GET，无任何写操作。
+			kind: "exact",
+			path: ROUTES.agentRules,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				writeJson(res, 200, rulesPayload());
 			},
 		},
 	];
