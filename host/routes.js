@@ -16,16 +16,28 @@
  *   GET  /api/dsh-alarm/agent-rules — { ok, text, source, missing }：`docs/agent-output-prompt.md`
  *                                 里第一个 ```text 围栏块（可一键复制粘给 agent 的规则块）。
  *                                 **只读**；文件读不到也回 200 + missing:true。
+ *   POST /api/dsh-alarm/sound   — { fileName, dataBase64 }：上传自定义铃声。**只读请求 + 写一个文件**：
+ *                                 校验 .wav 扩展名 / 解码后 ≤ 2 MB / 前 4 字节 RIFF，文件名清洗后
+ *                                 落到 `<DSH_HOME>/alarm/sounds/dsh-alarm-<清洗名>`，回
+ *                                 { ok, path, bytes }（path 是绝对路径，设置页存进 `sound` 字段）。
+ *                                 校验失败一律 400 `{ error }`，写盘失败 500 `{ error }`。
  *   GET  /api/dsh-alarm/health  — 存活探针
  *
  * 信任边界：loopback（Host 头 + Origin/Sec-Fetch-Site 校验）或已配对的远程 UI
  * 设备；设置写会落盘，未配对的局域网客户端一律拒绝。
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DSH_ALARM_SETTINGS_NS } from "./config.js";
-import { TEST_KINDS, alarmLogPath, materializeScript, settingsOf, testAlert } from "../lib/alarm.js";
+import {
+	TEST_KINDS,
+	alarmLogPath,
+	alarmSoundsDir,
+	materializeScript,
+	settingsOf,
+	testAlert,
+} from "../lib/alarm.js";
 import { listInstalledVoices } from "../lib/voices.js";
 
 /** 路由路径（client.js 里镜像了同样的字面量）。 */
@@ -34,6 +46,7 @@ const ROUTES = {
 	config: "/api/dsh-alarm/config",
 	test: "/api/dsh-alarm/test",
 	agentRules: "/api/dsh-alarm/agent-rules",
+	sound: "/api/dsh-alarm/sound",
 };
 
 /** 「报警规则块」的唯一来源：插件自带的说明文档。
@@ -67,6 +80,9 @@ const FIELDS = {
 	alertAwaitingTest: { kind: "bool", def: true },
 	alertRestart: { kind: "bool", def: true },
 	minTurnSeconds: { kind: "number", def: 0, min: 0, max: 86_400 },
+	// 铃声：系统铃声文件名（%SystemRoot%\Media 下）**或自定义 wav 的绝对路径**
+	// （上传路由 POST /api/dsh-alarm/sound 返回的 path 就是这种）。不限制取值：
+	// 文件是否存在由脚本侧 Test-Path 兜底，这里拦住会让设置页存不回去。
 	sound: { kind: "string", def: "Alarm03.wav" },
 	soundRepeats: { kind: "number", def: 1, min: 1, max: 5 },
 	soundEnabled: { kind: "bool", def: true },
@@ -105,7 +121,7 @@ const FIELDS = {
 	popupTurnEnd: { kind: "bool", def: false },
 	popupTurnInterrupt: { kind: "bool", def: false },
 	popupTurnError: { kind: "bool", def: false },
-	popupStalled: { kind: "bool", def: false },
+	popupStalled: { kind: "bool", def: true },
 	popupTest: { kind: "bool", def: true },
 	soundAsk: { kind: "bool", def: true },
 	soundPlan: { kind: "bool", def: true },
@@ -162,14 +178,31 @@ function writeJson(res, status, payload) {
 	res.end(body);
 }
 
-/** 读取并解析一个 JSON 请求体（1 MiB 上限）。 */
-function readJsonBody(req) {
+/** 自定义铃声上传的上限：**解码后 ≤ 2 MB**（WAV 头 + 采样数据；每次提醒都要现播，
+ *  再大的文件不适合走这个通道）。 */
+const SOUND_MAX_BYTES = 2 * 1024 * 1024;
+/** 上传请求体上限：base64 约为原文的 4/3（2 MB → 约 2.7 MB），再给 JSON 外壳与文件名留余量。
+ *  比 2 MB 大一截是**故意的**：超限要由解码后的字节数来判，才能回「具体原因」的 400，
+ *  而不是在解析阶段就被通用体上限挡掉。 */
+const SOUND_BODY_MAX_BYTES = 3 * 1024 * 1024;
+/** 落盘文件名前缀：避免覆盖用户自己放进 sounds 目录的同名文件。 */
+const SOUND_PREFIX = "dsh-alarm-";
+
+/** 清洗上传文件名：只保留 `[A-Za-z0-9._-]`，其余（含 `/` `\` 空格 中文 控制符）一律替换成 `_`，
+ *  再前置 `dsh-alarm-`。清洗后不含任何路径分隔符 → 结果永远是 sounds 目录下的**单个文件名**，
+ *  没有目录穿越面（`..\evil name.wav` → `dsh-alarm-.._evil_name.wav`，仍在目录内）。 */
+function soundFileName(fileName) {
+	return `${SOUND_PREFIX}${String(fileName).replace(/[^A-Za-z0-9._-]/gu, "_")}`;
+}
+
+/** 读取并解析一个 JSON 请求体（缺省 1 MiB 上限；上传铃声传更大的上限）。 */
+function readJsonBody(req, maxBytes = 1024 * 1024) {
 	return new Promise((resolve, reject) => {
 		const chunks = [];
 		let size = 0;
 		req.on("data", (chunk) => {
 			size += chunk.length;
-			if (size > 1024 * 1024) {
+			if (size > maxBytes) {
 				reject(new Error("body too large"));
 				req.destroy();
 				return;
@@ -512,6 +545,72 @@ export function makeRoutes(ctx, config) {
 			handler: async (req, res) => {
 				if (!guard(req, res, "GET")) return;
 				writeJson(res, 200, rulesPayload());
+			},
+		},
+		{
+			// 上传自定义铃声：**唯一一个会写文件的请求**——只写 `<DSH_HOME>/alarm/sounds`
+			// 下一个经清洗的 wav，成功回绝对路径（设置页把它存进 `sound` 字段）。
+			// 与其它路由同一道信任边界（loopback / 已配对设备）+ 只接受 POST。
+			kind: "exact",
+			path: ROUTES.sound,
+			handler: async (req, res) => {
+				if (!guard(req, res, "POST")) return;
+				let body;
+				try {
+					body = await readJsonBody(req, SOUND_BODY_MAX_BYTES);
+				} catch (error) {
+					// 上传接口的失败面只有两种：400（请求/内容不合法，带具体原因）与 500（写盘失败）。
+					// 所以体超限也归到 400，不沿用 /test 的 413。
+					const message = String(error?.message ?? error);
+					writeJson(res, 400, {
+						error: message.includes("body too large")
+							? `request body too large (limit ${SOUND_BODY_MAX_BYTES} bytes)`
+							: message,
+					});
+					return;
+				}
+				// 1) 扩展名：必须以 .wav 结尾（不区分大小写）——先看名字，避免为明显非法的请求解码。
+				const fileName = typeof body?.fileName === "string" ? body.fileName : "";
+				if (!fileName.toLowerCase().endsWith(".wav")) {
+					writeJson(res, 400, { error: "fileName must end with .wav" });
+					return;
+				}
+				// 2) 内容：base64 → 字节。大小与魔数都要过，否则声音会静默不响。
+				const dataBase64 = typeof body?.dataBase64 === "string" ? body.dataBase64 : "";
+				if (dataBase64 === "") {
+					writeJson(res, 400, { error: "dataBase64 is required (base64-encoded wav bytes)" });
+					return;
+				}
+				const bytes = Buffer.from(dataBase64, "base64");
+				if (bytes.length === 0) {
+					writeJson(res, 400, { error: "dataBase64 decoded to 0 bytes" });
+					return;
+				}
+				if (bytes.length > SOUND_MAX_BYTES) {
+					writeJson(res, 400, {
+						error: `wav too large: ${bytes.length} bytes (limit ${SOUND_MAX_BYTES} bytes)`,
+					});
+					return;
+				}
+				if (bytes.length < 4 || bytes.subarray(0, 4).toString("latin1") !== "RIFF") {
+					// ponytail: 只认 RIFF 魔数，不解析 WAVE/fmt 块（够挡住「随便一个文件改名成 .wav」；
+					// 播放侧 SoundPlayer 自己会失败并回落到 beep）。天花板：非 PCM/损坏的 WAV 仍能上传成功。
+					// 升级路径：若真出现「传上去但播不出」，再补 bytes[8..12] === "WAVE" 与 fmt 块校验。
+					writeJson(res, 400, { error: "not a wav file: missing RIFF header" });
+					return;
+				}
+				// 3) 落盘：名字清洗成单个路径段，目录按需创建。
+				const directory = alarmSoundsDir();
+				const path = join(directory, soundFileName(fileName));
+				try {
+					mkdirSync(directory, { recursive: true });
+					writeFileSync(path, bytes);
+				} catch (error) {
+					ctx.logger?.warn?.(`dsh-alarm: 自定义铃声写入失败：${error?.message ?? error}`);
+					writeJson(res, 500, { error: error?.message ?? String(error) });
+					return;
+				}
+				writeJson(res, 200, { ok: true, path, bytes: bytes.length });
 			},
 		},
 	];

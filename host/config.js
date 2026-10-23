@@ -122,8 +122,8 @@ export const Config = z.object({
 	popupTurnInterrupt: z.boolean().default(false).volatile(),
 	/** 本轮报错时弹窗（默认不弹）。 */
 	popupTurnError: z.boolean().default(false).volatile(),
-	/** agent 停下来且没有后续动作时弹窗（默认不弹：与「本轮结束」同属轻事件）。 */
-	popupStalled: z.boolean().default(false).volatile(),
+	/** agent 停下来且没有后续动作时弹窗（默认弹：「停住」是必须有人接手的状态，不能只响一声）。 */
+	popupStalled: z.boolean().default(true).volatile(),
 	/** 手工测试提醒时弹窗。 */
 	popupTest: z.boolean().default(true).volatile(),
 

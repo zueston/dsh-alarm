@@ -1,8 +1,8 @@
 /** 离线自检：不启动 DSH，直接用假 ctx 跑 host/routes.js 的路由与 client.js 的 slot 注册。
  *
  *  覆盖面（改了产品代码就照着这份清单核对）：
- *   - **4 条路由**（全部 kind=exact）：`/api/dsh-alarm/config`、`/api/dsh-alarm/test`、
- *     `/api/dsh-alarm/agent-rules`、`/api/dsh-alarm/health`；
+ *   - **5 条路由**（全部 kind=exact）：`/api/dsh-alarm/config`、`/api/dsh-alarm/test`、
+ *     `/api/dsh-alarm/agent-rules`、`/api/dsh-alarm/sound`、`/api/dsh-alarm/health`；
  *   - **5 处槽位注册**：`sidebar.panellist`(33)、`shell.overlay`×2（设置弹窗
  *     `dsh-alarm.settings-dialog` order 120 + 规则弹窗 `dsh-alarm.rules-dialog` order 121）、
  *     `settings.section`(51)、`plugins.bundle.config`；**绝不注册 `main`**（白屏根因，已删除）；
@@ -14,19 +14,31 @@
  *     `GET agent-rules` 的规则块字符数 = `docs/agent-output-prompt.md`
  *     里第一个 ```text 围栏块的字符数；
  *   - `lib/alarm.js` 的 `parseAlarmTags`（严格输出协议）：6 个标签各一条 + 行内出现不匹配
- *     + 大小写错误不匹配 + TEST 空任务名。
+ *     + 大小写错误不匹配 + TEST 空任务名；
+ *   - `POST /sound`（上传自定义铃声）：合法 wav → 200 且**文件真的落盘**（写进临时 `DSH_HOME`，
+ *     跑完清理）、非法扩展名 → 400、解码后超 2 MB → 400、非 POST → 405。
+ *
+ *  **DSH_HOME 指向临时目录**：上传路由会真的写文件，不能写进用户的 `~/.dsh`
+ *  （`materializeScript` 的预热脚本也跟着落进去，同样无害）。
  *
  *  **默认静默**：会真的响铃/弹窗的那段（POST /test）默认跳过，只有显式
  *  `DSH_ALARM_TEST_RING=1` 才跑——默认环境下本脚本不出声、不弹窗。
  *  用完即可删除（不是插件的一部分）。 */
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 插件根目录（本文件在 <root>/test/ 下，取上一级）。下游用它拼 host/、lib/、client.js 的路径。 */
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// ---------------- 临时 DSH_HOME（上传铃声会真的写文件） ----------------
+// 必须在 import 宿主代码**之前**设好：lib/alarm.js 的 dshHome() 是**调用时**现读 env，
+// 但 applyRoutes() 会立刻预热脚本、上传用例也会立刻落盘，早点设省得写进用户的 ~/.dsh。
+const HOME = mkdtempSync(resolve(tmpdir(), 'dsh-alarm-verify-'));
+process.env.DSH_HOME = HOME;
 
 // ---------------- 假 ctx / config ----------------
 const writes = [];
@@ -90,11 +102,12 @@ const { applyRoutes } = await import(`file:///${SRC}/host/routes.js`);
 applyRoutes(ctx, config);
 
 // ---------------- 路由表 ----------------
-assert.strictEqual(routes.length, 4, `应注册 4 条路由，实际 ${routes.length}`);
+assert.strictEqual(routes.length, 5, `应注册 5 条路由，实际 ${routes.length}`);
 const byPath = Object.fromEntries(routes.map((r) => [r.path, r]));
 assert.ok(byPath['/api/dsh-alarm/config'], '缺 config 路由');
 assert.ok(byPath['/api/dsh-alarm/test'], '缺 test 路由');
 assert.ok(byPath['/api/dsh-alarm/agent-rules'], '缺 agent-rules 路由');
+assert.ok(byPath['/api/dsh-alarm/sound'], '缺 sound（自定义铃声上传）路由');
 assert.ok(byPath['/api/dsh-alarm/health'], '缺 health 路由');
 for (const route of routes) assert.strictEqual(route.kind, 'exact');
 console.log('routes ok: %d 条 -> %s', routes.length, Object.keys(byPath).join(', '));
@@ -142,11 +155,12 @@ let snapshot;
   assert.strictEqual(payload.values.alertRestart, true);
   // 严格输出协议是两态枚举，默认 `tag-first`（默认模式：标签优先 + 旧判定兜底）。
   assert.strictEqual(payload.values.protocolMode, 'tag-first');
-  // 「Agent 停下来且没有后续动作」默认开；与其它轻事件一样默认不弹窗。
+  // 「Agent 停下来且没有后续动作」默认开；弹窗也默认开（停住 = 必须有人接手，
+  // 只响一声铃声容易被忽略；这是唯一一个默认弹窗的「轻事件」例外）。
   assert.strictEqual(payload.values.alertStalled, true);
   assert.strictEqual(payload.values.soundStalled, true);
   assert.strictEqual(payload.values.voiceStalled, true);
-  assert.strictEqual(payload.values.popupStalled, false);
+  assert.strictEqual(payload.values.popupStalled, true, 'popupStalled 默认应为 true');
   assert.strictEqual(payload.values.voiceTextStalled, '我停下来了，没有后续动作');
   // 「待人工测试」的批次/聚合规则默认值（缺省 = 旧行为：每个任务各自提醒、不聚合）。
   assert.strictEqual(payload.values.awaitingTestScope, 'all');
@@ -185,11 +199,12 @@ let snapshot;
     assert.strictEqual(payload.values[`sound${kind}`], true, `sound${kind} 默认应为 true`);
     assert.strictEqual(payload.values[`voice${kind}`], true, `voice${kind} 默认应为 true`);
   }
-  // 轻事件默认不弹窗；需要你动手的三件事 + 待人工测试 + 测试按钮默认弹窗。
-  for (const kind of ['Ask', 'Plan', 'TaskComplete', 'AwaitingTest', 'Test']) {
+  // 轻事件默认不弹窗；需要你动手的三件事 + 待人工测试 + 测试按钮默认弹窗；
+  // 「停住」是例外（默认弹窗：没人接手就不会再有进展）。
+  for (const kind of ['Ask', 'Plan', 'TaskComplete', 'AwaitingTest', 'Test', 'Stalled']) {
     assert.strictEqual(payload.values[`popup${kind}`], true, `popup${kind} 默认应为 true`);
   }
-  for (const kind of ['Restart', 'TurnEnd', 'TurnInterrupt', 'TurnError', 'Stalled']) {
+  for (const kind of ['Restart', 'TurnEnd', 'TurnInterrupt', 'TurnError']) {
     assert.strictEqual(payload.values[`popup${kind}`], false, `popup${kind} 默认应为 false`);
   }
   // 三个通道总开关默认开启。
@@ -217,6 +232,9 @@ let snapshot;
   assert.strictEqual(payload.defaults.showInSettings, false, 'defaults.showInSettings 必须是 false');
   assert.strictEqual(payload.defaults.protocolMode, 'tag-first', 'defaults.protocolMode 必须是 tag-first');
   assert.strictEqual(payload.defaults.alertStalled, true, 'defaults.alertStalled 必须是 true');
+  // 「恢复默认」也要还原成新默认值（弹窗开）：三处默认值（schema / FIELDS / DEFAULTS）必须同口径，
+  // 只改两处时这里会红。
+  assert.strictEqual(payload.defaults.popupStalled, true, 'defaults.popupStalled 必须是 true');
   assert.strictEqual(payload.defaults.popupStyle, 'topmost', 'defaults.popupStyle 必须是 topmost');
   assert.strictEqual(payload.defaults.awaitingTestScope, 'all', 'defaults.awaitingTestScope 必须是 all');
   snapshot = payload.values;
@@ -370,6 +388,110 @@ let snapshot;
   assert.strictEqual(payload.values.protocolMode, 'tag-only', "要存的 'tag-only' 必须原样保留");
   assert.strictEqual(writes.at(-1).values.protocolMode, 'tag-only', "写入磁盘的值必须是 'tag-only'");
   console.log("POST protocolMode=tag-only ok: 'tag-only' 原样保留");
+}
+
+// ---------------- POST /sound：上传自定义铃声（唯一会写文件的路由） ----------------
+/** 拼一个**最小但合法**的 WAV：44 字节头 + payloadBytes 个静音采样。 */
+function makeWav(payloadBytes = 8) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'latin1');
+  header.writeUInt32LE(36 + payloadBytes, 4);
+  header.write('WAVE', 8, 'latin1');
+  header.write('fmt ', 12, 'latin1');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // 单声道
+  header.writeUInt32LE(8000, 24); // 采样率
+  header.writeUInt32LE(8000, 28); // 每秒字节数
+  header.writeUInt16LE(1, 32); // block align
+  header.writeUInt16LE(8, 34); // 位深
+  header.write('data', 36, 'latin1');
+  header.writeUInt32LE(payloadBytes, 40);
+  return Buffer.concat([header, Buffer.alloc(payloadBytes)]);
+}
+
+/** 发一次上传请求（走真实路由 + 真实 guard：Host 头是 loopback）。 */
+async function postSound(body, method = 'POST') {
+  const res = makeRes();
+  await byPath['/api/dsh-alarm/sound'].handler(makeReq(method, body), res);
+  return { status: res.status, payload: res.body === '' ? null : JSON.parse(res.body) };
+}
+
+// 1) 合法 wav → 200，且**文件真的落盘**（字节逐个相等）。
+{
+  const wav = makeWav(64);
+  const { status, payload } = await postSound({ fileName: 'my-alarm.wav', dataBase64: wav.toString('base64') });
+  assert.strictEqual(status, 200, `应 200，实际 ${status}: ${JSON.stringify(payload)}`);
+  assert.strictEqual(payload.ok, true, 'ok 必须是 true');
+  assert.strictEqual(payload.bytes, wav.length, `bytes 应为解码后长度 ${wav.length}，实际 ${payload.bytes}`);
+  assert.ok(
+    resolve(payload.path).startsWith(resolve(HOME)),
+    `落盘路径必须在临时 DSH_HOME 下：${payload.path}`,
+  );
+  assert.strictEqual(
+    resolve(dirname(payload.path)),
+    resolve(HOME, 'alarm', 'sounds'),
+    '必须落在 <DSH_HOME>/alarm/sounds 下',
+  );
+  assert.ok(payload.path.endsWith('dsh-alarm-my-alarm.wav'), `文件名应带 dsh-alarm- 前缀：${payload.path}`);
+  assert.strictEqual(existsSync(payload.path), true, '响应说成功，文件就必须真的存在');
+  assert.deepStrictEqual(readFileSync(payload.path), wav, '落盘字节必须与上传字节逐字节一致');
+  console.log('POST sound ok: %s（%d 字节，已落盘且逐字节一致）', payload.path, payload.bytes);
+}
+
+// 2) 文件名清洗：`..\evil name.wav` → 只留 [A-Za-z0-9._-]，其余变 `_`，且**不越出 sounds 目录**。
+{
+  const wav = makeWav(8);
+  const { status, payload } = await postSound({ fileName: '..\\evil name.wav', dataBase64: wav.toString('base64') });
+  assert.strictEqual(status, 200, `应 200，实际 ${status}: ${JSON.stringify(payload)}`);
+  assert.strictEqual(
+    resolve(dirname(payload.path)),
+    resolve(HOME, 'alarm', 'sounds'),
+    `清洗后仍是 sounds 目录下的单个文件（无目录穿越）：${payload.path}`,
+  );
+  assert.strictEqual(
+    basename(payload.path),
+    'dsh-alarm-.._evil_name.wav',
+    `清洗结果不符：${payload.path}`,
+  );
+  console.log('POST sound 文件名清洗 ok: %s', basename(payload.path));
+}
+
+// 3) 非法扩展名 → 400（不区分大小写的 .wav 才认）。
+{
+  const wav = makeWav(8);
+  const { status, payload } = await postSound({ fileName: 'evil.mp3', dataBase64: wav.toString('base64') });
+  assert.strictEqual(status, 400, `非法扩展名应 400，实际 ${status}: ${JSON.stringify(payload)}`);
+  assert.match(payload.error, /\.wav/u, `400 的 error 要说明原因，实际 ${JSON.stringify(payload)}`);
+  console.log('POST sound 非法扩展名 ok: 400 %j', payload.error);
+}
+
+// 4) 解码后超 2 MB → 400（按**解码后的字节数**判，不是按 base64 长度）。
+{
+  const wav = makeWav(2 * 1024 * 1024); // 44 字节头 + 2 MB 数据 → 超限
+  const { status, payload } = await postSound({ fileName: 'big.wav', dataBase64: wav.toString('base64') });
+  assert.strictEqual(status, 400, `超 2 MB 应 400，实际 ${status}: ${JSON.stringify(payload)}`);
+  assert.match(payload.error, /too large|2\d{2,}/u, `error 要说明原因，实际 ${JSON.stringify(payload)}`);
+  console.log('POST sound 超 2MB ok: 400 %j', payload.error);
+}
+
+// 5) 前 4 字节不是 RIFF（魔数不对）→ 400；写盘面为零。
+{
+  const { status, payload } = await postSound({
+    fileName: 'fake.wav',
+    dataBase64: Buffer.from('NOTARIFF-not-a-wav').toString('base64'),
+  });
+  assert.strictEqual(status, 400, `非 RIFF 应 400，实际 ${status}: ${JSON.stringify(payload)}`);
+  assert.match(payload.error, /RIFF/u, `error 要说明原因，实际 ${JSON.stringify(payload)}`);
+  assert.strictEqual(existsSync(resolve(HOME, 'alarm', 'sounds', 'dsh-alarm-fake.wav')), false, '被拒绝的请求不能落盘');
+  console.log('POST sound 非 RIFF ok: 400 %j（未落盘）', payload.error);
+}
+
+// 6) 只接受 POST（与其它路由同一道方法围栏）。
+{
+  const { status } = await postSound(undefined, 'GET');
+  assert.strictEqual(status, 405, `GET 应 405，实际 ${status}`);
+  console.log('POST sound 方法围栏 ok: GET → 405');
 }
 
 // ---------------- 非 loopback 拒绝 ----------------
@@ -596,5 +718,270 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   for (const entry of registered) assert.strictEqual(typeof entry.component, 'function');
   console.log('client slots ok: %d 处 | %s | sidebar order = %d', registered.length, names.join(', '), sidebar.order);
 }
+
+// ---------------- client.js：设置卡片的渲染结构（视觉重做的结构性回归） ----------------
+// 上面那段只验「注册表」，验不到渲染出来的东西。这里把 client.js **再装一次**（模块级状态全新），
+// 配一套极小的 React 替身把设置卡片真渲染成宿主树，再按结构断言：
+//   - 条件表 10 行；表头**两行**（第一行四个通道总开关，第二行六个文字标签）；
+//   - 每行恰好 4 个开关 + 1 个播报文本输入；
+//   - 协议模式是分段控件（2 个选项，值仍是 tag-first / tag-only）；
+//   - **TTS 分区里不再有逐条件播报文本字段**（那 10 个 `voiceText*` 已经上移到条件表最后一列）。
+{
+  /** 组件渲染帧：hooks 按调用顺序编号（迷你版，够单次静态渲染用）。 */
+  let frame = null;
+  const MiniReact = {
+    createElement(type, props, ...children) {
+      const flat = [];
+      for (const child of children) {
+        if (Array.isArray(child)) flat.push(...child);
+        else flat.push(child);
+      }
+      const nextProps = { ...(props ?? {}) };
+      nextProps.children = flat.length > 1 ? flat : flat[0];
+      return { type, props: nextProps, children: flat };
+    },
+    memo: (fn) => fn,
+    Component: class Component {
+      constructor(props) {
+        this.props = props;
+      }
+      static getDerivedStateFromError() {
+        return { failed: false };
+      }
+    },
+    useState(init) {
+      const index = frame.index++;
+      if (!(index in frame.hooks)) frame.hooks[index] = typeof init === 'function' ? init() : init;
+      const set = (next) => {
+        frame.hooks[index] = typeof next === 'function' ? next(frame.hooks[index]) : next;
+      };
+      return [frame.hooks[index], set];
+    },
+    useEffect(fn) {
+      frame.index += 1;
+      frame.effects.push(fn);
+    },
+    useLayoutEffect(fn) {
+      frame.index += 1;
+      frame.effects.push(fn);
+    },
+    useCallback(fn) {
+      frame.index += 1;
+      return fn;
+    },
+    useMemo(fn) {
+      frame.index += 1;
+      return fn();
+    },
+    useRef(init) {
+      const index = frame.index++;
+      if (!(index in frame.hooks)) frame.hooks[index] = { current: init === undefined ? null : init };
+      return frame.hooks[index];
+    },
+  };
+
+  /** 把元素树真正展开成宿主树；函数/类组件都会被调用（class 的 render 也会跑）。 */
+  function renderTree(node) {
+    if (node === null || node === undefined || node === true || node === false) return null;
+    if (Array.isArray(node)) {
+      const out = [];
+      for (const child of node) {
+        const rendered = renderTree(child);
+        if (rendered === null) continue;
+        if (Array.isArray(rendered)) out.push(...rendered);
+        else out.push(rendered);
+      }
+      return out;
+    }
+    if (typeof node === 'string' || typeof node === 'number') return { kind: 'text', text: String(node) };
+    if (typeof node !== 'object') return null;
+
+    const { type } = node;
+    if (typeof type === 'function') {
+      const isClass = typeof type.prototype?.render === 'function';
+      if (isClass) {
+        const instance = new type(node.props);
+        instance.props = node.props;
+        if (instance.state === undefined) instance.state = {};
+        return renderTree(instance.render());
+      }
+      const previous = frame;
+      const own = { hooks: [], index: 0, effects: [] };
+      frame = own;
+      let output;
+      try {
+        output = type(node.props);
+      } finally {
+        frame = previous;
+      }
+      const rendered = renderTree(output);
+      // 子元素渲染完（ref 已挂上）再跑 effect，与 React 的提交顺序一致。
+      for (const effect of own.effects) {
+        try {
+          effect();
+        } catch {
+          // effect 抛错不该让这条结构断言挂掉（渲染结构已经拿到了）。
+        }
+      }
+      return rendered;
+    }
+
+    const element = { kind: 'host', type, props: node.props ?? {}, children: [] };
+    const kids = [];
+    for (const child of node.children) {
+      const rendered = renderTree(child);
+      if (rendered === null) continue;
+      if (Array.isArray(rendered)) kids.push(...rendered);
+      else kids.push(rendered);
+    }
+    element.children = kids;
+    const ref = element.props.ref;
+    if (ref !== null && ref !== undefined && typeof ref === 'object') ref.current = { offsetWidth: 0, offsetLeft: 0 };
+    return element;
+  }
+
+  function walk(node, visit) {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, visit);
+      return;
+    }
+    visit(node);
+    for (const child of node.children ?? []) walk(child, visit);
+  }
+  const findAll = (node, predicate) => {
+    const out = [];
+    walk(node, (item) => {
+      if (item.kind === 'host' && predicate(item)) out.push(item);
+    });
+    return out;
+  };
+  const findBy = (node, predicate) => findAll(node, predicate)[0] ?? null;
+  const texts = (node) => {
+    const out = [];
+    walk(node, (item) => {
+      if (item.kind === 'text') out.push(item.text);
+    });
+    return out;
+  };
+
+  // 渲染用的快照：三个入口全开，才拿得到卡片本体。
+  const viewSnapshot = { ...snapshot, showInMain: true, showInPlugins: true, showInSettings: true };
+  const viewOptions = { wavs: ['Alarm03.wav', 'notify.wav'], voices: ['Microsoft Huihui Desktop'] };
+  const fetchStub = async (url, init) => {
+    if ((init?.method ?? 'GET') === 'POST') {
+      const payload = JSON.parse(String(init?.body ?? '{}'));
+      return { ok: true, status: 200, json: async () => ({ values: payload.values, expected: payload.values, defaults: viewSnapshot, options: viewOptions }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ values: viewSnapshot, expected: viewSnapshot, defaults: viewSnapshot, options: viewOptions }),
+    };
+  };
+  let viewFactory = null;
+  new Function('window', 'fetch', 'Headers', readFileSync(`${SRC}/client.js`, 'utf8'))(
+    {
+      __ModuleLoader__: {
+        load(entry) {
+          viewFactory = entry.factory;
+        },
+      },
+    },
+    fetchStub,
+    class Headers {
+      constructor(init) {
+        this.init = init;
+      }
+    },
+  );
+  assert.ok(viewFactory !== null, 'client.js 没有调用 __ModuleLoader__.load（渲染段）');
+  const viewMod = viewFactory(() => MiniReact);
+  const viewRegistered = [];
+  viewMod.apply({
+    slots: {
+      inject(name, register) {
+        register();
+      },
+      register(spec, component) {
+        viewRegistered.push({ spec, component });
+        return () => {};
+      },
+    },
+  });
+  // apply() 里 `void refreshConfig()`：等预加载落进模块级缓存，卡片首帧才是完整表单。
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const cardSlot = viewRegistered.find((entry) => entry.spec.name === 'plugins.bundle.config');
+  assert.ok(cardSlot, '没有 plugins.bundle.config 注册（渲染段拿不到卡片）');
+  const card = renderTree(MiniReact.createElement(cardSlot.component, {}));
+  assert.ok(card !== null, '设置卡片渲染成了 null（三个入口都是开着的）');
+
+  // ---- 条件表：10 行 × (4 开关 + 1 播报文本) ----
+  const conditionRows = findAll(card, (item) => item.props.className === 'ala-trow');
+  assert.strictEqual(conditionRows.length, 10, `条件表应有 10 行，实际 ${conditionRows.length}`);
+  for (const [index, row] of conditionRows.entries()) {
+    const switches = findAll(row, (item) => item.type === 'input' && item.props.type === 'checkbox');
+    assert.strictEqual(switches.length, 4, `第 ${index + 1} 行应有 4 个开关，实际 ${switches.length}`);
+    const voiceInputs = findAll(row, (item) => item.type === 'input' && item.props.className === 'ala-voice-input');
+    assert.strictEqual(voiceInputs.length, 1, `第 ${index + 1} 行应有恰好 1 个播报文本输入，实际 ${voiceInputs.length}`);
+  }
+  // 「语音播报关掉 → 该行播报文本输入框 disabled」：关掉第一行的语音播报再看那一个框。
+  const firstRowSwitches = findAll(conditionRows[0], (item) => item.type === 'input' && item.props.type === 'checkbox');
+  const voiceSwitch = firstRowSwitches.find((item) => String(item.props['aria-label'] ?? '').startsWith('语音播报：'));
+  assert.ok(voiceSwitch, '第一行没有「语音播报」开关');
+  const firstVoiceInput = () => findAll(conditionRows[0], (item) => item.type === 'input' && item.props.className === 'ala-voice-input')[0];
+  assert.strictEqual(firstVoiceInput().props.disabled, voiceSwitch.props.checked !== true, '播报文本的 disabled 必须跟着「语音播报」开关走');
+
+  // ---- 表头两行 ----
+  const head = findBy(card, (item) => item.props.className === 'ala-thead');
+  assert.ok(head !== null, '条件表缺表头（.ala-thead）');
+  // 7 列 × 2 行 = 14 格；第一行 7 格、第二行 7 格。
+  assert.strictEqual(head.children.length, 14, `表头应是两行 × 7 列 = 14 格，实际 ${head.children.length}`);
+  const headSwitches = findAll(head, (item) => item.type === 'input' && item.props.type === 'checkbox');
+  assert.strictEqual(headSwitches.length, 4, `表头第一行应有 4 个通道总开关，实际 ${headSwitches.length}`);
+  // 第二行（后 7 格）是纯文字标签，不该再出现任何控件。
+  assert.strictEqual(
+    findAll({ kind: 'host', type: 'div', props: {}, children: head.children.slice(7) }, (item) => item.type === 'input').length,
+    0,
+    '表头第二行只应有文字标签，不该有控件',
+  );
+  const headTexts = texts(head);
+  for (const label of ['条件', '提醒', '弹窗', '铃声', '语音播报', '播报文本']) {
+    assert.ok(headTexts.includes(label), `表头第二行缺「${label}」`);
+  }
+
+  // ---- 协议模式：分段控件（2 个选项，值不变）----
+  const segment = findBy(card, (item) => item.props.className === 'ala-seg');
+  assert.ok(segment !== null, '协议模式没有渲染成分段控件（.ala-seg）');
+  const segmentOptions = findAll(segment, (item) => item.props.className === 'ala-seg-opt');
+  assert.deepStrictEqual(
+    segmentOptions.map((item) => item.props['data-value']),
+    ['tag-first', 'tag-only'],
+    '分段控件应是 默认模式(tag-first) / 严格模式(tag-only) 两项',
+  );
+  assert.strictEqual(segmentOptions[0].props['data-selected'], 'true', '默认模式应初始选中');
+
+  // ---- TTS 分区瘦身：逐条件播报文本字段不该再出现在分区里 ----
+  const cardTexts = texts(card);
+  for (const label of ['「需要你裁决」播报文本', '「本轮报错」播报文本', '「任务到待人工测试」播报文本', '兜底播报模板']) {
+    assert.strictEqual(cardTexts.includes(label), false, `TTS 分区里不该再有「${label}」（已上移到条件表最后一列）`);
+  }
+  assert.ok(cardTexts.includes('兜底文本'), 'TTS 分区缺「兜底文本」');
+  const voiceLabels = findAll(card, (item) => String(item.props?.['aria-label'] ?? '').startsWith('播报文本：'));
+  assert.strictEqual(voiceLabels.length, 10, `条件表最后一列应有 10 个播报文本输入，实际 ${voiceLabels.length}`);
+  // 那 10 个键仍在键表里（TTS 分区搬走不等于字段消失）。
+  const tenVoiceKeys = ['Ask', 'Plan', 'TaskComplete', 'TurnEnd', 'Interrupt', 'Error', 'Stalled', 'AwaitingTest', 'Restart', 'Test'];
+  for (const kind of tenVoiceKeys) assert.ok(viewMod.missingFieldKeys({}).includes(`voiceText${kind}`), `键表缺 voiceText${kind}`);
+  console.log(
+    'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、TTS 分区无逐条件字段',
+    conditionRows.length,
+  );
+}
+
+// ---------------- 清理临时 DSH_HOME ----------------
+// 上传用例往里面写过 wav；预热脚本（materializeScript）也落在这里。跑完一律删掉。
+rmSync(HOME, { recursive: true, force: true });
+assert.strictEqual(existsSync(HOME), false, '临时 DSH_HOME 应被清掉（不留下测试残留）');
+console.log('cleanup ok: 临时 DSH_HOME 已删除（%s）', HOME);
 
 console.log('\nALL CHECKS PASSED');

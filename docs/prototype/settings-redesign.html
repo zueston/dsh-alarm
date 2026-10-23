@@ -171,7 +171,7 @@
   .thead,
   .trow {
     display: grid;
-    grid-template-columns: 40px minmax(150px, 1fr) repeat(4, 54px) minmax(180px, 250px);
+    grid-template-columns: 36px minmax(118px, 1fr) repeat(4, 50px) minmax(170px, 210px);
     gap: 10px;
     align-items: start;
   }
@@ -497,16 +497,16 @@
 <script>
   // ---- 条件行数据（原型用；真实实现里来自 SECTIONS） ----
   const rows = [
-    { label: '需要你裁决（ask_user_question）', voice: '需要你裁决', on: [true, true, true, true] },
-    { label: '需要你确认计划（exit_plan_mode）', voice: '需要你确认计划', on: [true, true, true, true] },
-    { label: '全部任务完成（任务级完成，不是每轮结束）', help: '只在 agent 调用 update_goal（action=complete）时响；普通轮次结束不会响。', voice: '全部任务完成', on: [true, true, true, true] },
-    { label: '需要重启 DSH', help: '严格模式下只认 [[ALARM:RESTART]] 标签；默认模式下正文提到「要重启 DSH」也会提醒。', voice: '需要重启 DSH', on: [true, true, true, true] },
-    { label: '任务到「待人工测试」', help: '默认模式下按状态文件的真实相位变化识别；严格模式下只认 [[ALARM:TEST:任务名]] 标签。', voice: '需要你手工测试', on: [true, true, true, true] },
-    { label: '每一轮结束都提醒', help: '默认关闭；勾选后每轮跑完都响一次。默认不弹窗，避免每轮都打断。', voice: '本轮结束', on: [false, false, false, false] },
-    { label: '本轮中断时提醒（手动打断）', help: '默认关闭。', voice: '本轮中断', on: [false, false, false, false] },
-    { label: '本轮报错时提醒（异常结束）', help: '默认打开。', voice: '本轮报错', on: [true, true, true, true] },
-    { label: 'Agent 停下来且没有后续动作', help: '一轮正常结束、但没调用任何工具也没请你裁决时提醒；默认开启。', voice: '我停下来了，没有后续动作', on: [true, false, true, true] },
-    { label: '手工测试提醒', help: '默认开启；取消后这一行的 ▶ 试听也不会响。', voice: '这是语音测试示例', on: [true, true, true, true] },
+    { label: '需要你裁决', voice: '需要你裁决', on: [true, true, true, true] },
+    { label: '需要你确认计划', voice: '需要你确认计划', on: [true, true, true, true] },
+    { label: '全部任务完成', help: 'update_goal 完成时', voice: '全部任务完成', on: [true, true, true, true] },
+    { label: '需要重启 DSH', help: '改动要重启才生效', voice: '需要重启 DSH', on: [true, true, true, true] },
+    { label: '任务到「待人工测试」', help: '状态文件翻到待测', voice: '需要你手工测试', on: [true, true, true, true] },
+    { label: '每一轮结束都提醒', help: '默认关，避免每轮打断', voice: '本轮结束', on: [false, false, false, false] },
+    { label: '本轮中断时提醒（手动打断）', help: '手动打断时', voice: '本轮中断', on: [false, false, false, false] },
+    { label: '本轮报错时提醒（异常结束）', help: '异常结束', voice: '本轮报错', on: [true, true, true, true] },
+    { label: 'Agent 停下来且没有后续动作', help: '没调工具也没问你', voice: '我停下来了，没有后续动作', on: [true, true, true, true] },
+    { label: '手工测试提醒', help: '试听按钮走这一行', voice: '这是语音测试示例', on: [true, true, true, true] },
   ];
 
   const host = document.getElementById('rows');

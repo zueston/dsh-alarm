@@ -51,6 +51,12 @@
  * 别把这段当冗余删掉——它修的就是那个报错。
  * 条件表/字段行都加了 `React.memo` + 比较器：勾一个复选框只重渲染那一行，
  * 不再整棵树重建（原先勾选明显卡顿）。两处都别改回「每次全量」。
+ *
+ * **视觉是一套自带的 CSS**（`ensureStyle()` 一次性注入 `.ala-*` 类，颜色仍走宿主的
+ * `--dsw-alias-*` 变量兜底，品牌色/危险色/琥珀色是固定值）：组件里只写 className，
+ * 需要伪元素的地方（开关圆点 `::after`、分段滑块）**必须走 CSS**——行内 style 做不出伪元素。
+ * 条件表最后一列是**播报文本**（每行一个 `voiceText*` 字段），所以 TTS 分区里不再重复
+ * 那十个字段；键表由 `fieldSpecOf()` 从同一份 SECTIONS 反推，两边不会走偏。
  */
 
 window.__ModuleLoader__.load({
@@ -263,11 +269,8 @@ window.__ModuleLoader__.load({
 			{ value: 'tag-only', label: '严格模式', tip: STRICT_MODE_TIP },
 		];
 
-		/** 每条播报文本行共用的帮助文案（是否出声由条件表表头的语音播报总开关决定）。 */
-		const VOICE_TEXT_HELP = '由条件表表头的语音播报总开关决定。';
-
-		/** 条件表的列定义（顺序＝每行复选框的顺序，表头与单元格共用同一份）。
-		 *  `toggleKey` 是该通道的总开关字段，表头那一行渲染的就是它；
+		/** 条件表的列定义（顺序＝每行开关的顺序，表头与单元格共用同一份）。
+		 *  `toggleKey` 是该通道的总开关字段，表头第一行渲染的就是它；
 		 *  `toggleLabel` 是表头复选框的可访问名称（「总开关：提醒」）。 */
 		const CONDITION_COLUMNS = [
 			{ id: 'alert', label: '提醒', toggleKey: 'enabled', toggleLabel: '总开关：提醒' },
@@ -299,9 +302,23 @@ window.__ModuleLoader__.load({
 		/** 表单分区：每区一张小卡片。`rows` 是条件表（每行 4 个复选框），`fields` 是普通字段行。 */
 		const SECTIONS = [
 			{
+				id: 'protocol',
+				title: '协议模式',
+				fields: [
+					{
+						key: 'protocolMode',
+						type: 'segmented',
+						label: '协议模式',
+						options: PROTOCOL_MODE_OPTIONS,
+						fallback: 'tag-first',
+						help: '默认模式：标签优先，没写标签时用旧判定兜底；严格模式：只认标签（需先发协议）。',
+					},
+				],
+			},
+			{
 				id: 'trigger',
 				title: '什么时候提醒',
-				desc: '一行一个条件：勾「提醒」表示这个条件会提醒，右边三列决定它用哪几条通道。表头那行是四条通道的总开关，关掉后所有条件都不走这条通道；提醒与通道都要勾上才会真的响。每行最左边的 ▶ 按当前设置试听该条件（只响这一次，不改配置）。',
+				desc: '一行一个条件：勾「提醒」表示这个条件会提醒，右边三列决定它用哪几条通道。表头那一行是四条通道的总开关，关掉后所有条件都不走这条通道。最后一列是该条件触发时的播报文本（留空即用兜底文本）。每行最左的 ▶ 按当前设置试听该条件（只响这一次，不改配置）。',
 				rows: [
 					{
 						kind: 'ask',
@@ -309,7 +326,8 @@ window.__ModuleLoader__.load({
 						popup: 'popupAsk',
 						sound: 'soundAsk',
 						voice: 'voiceAsk',
-						label: '需要你裁决（ask_user_question）',
+						voiceText: 'voiceTextAsk',
+						label: '需要你裁决',
 					},
 					{
 						kind: 'plan',
@@ -317,7 +335,8 @@ window.__ModuleLoader__.load({
 						popup: 'popupPlan',
 						sound: 'soundPlan',
 						voice: 'voicePlan',
-						label: '需要你确认计划（exit_plan_mode）',
+						voiceText: 'voiceTextPlan',
+						label: '需要你确认计划',
 					},
 					{
 						kind: 'task-complete',
@@ -325,8 +344,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupTaskComplete',
 						sound: 'soundTaskComplete',
 						voice: 'voiceTaskComplete',
-						label: '全部任务完成（任务级完成，不是每轮结束）',
-						help: '只在 agent 调用 update_goal（action=complete）时响；普通轮次结束不会响。',
+						voiceText: 'voiceTextTaskComplete',
+						label: '全部任务完成',
+						help: 'update_goal 完成时',
 					},
 					{
 						kind: 'restart',
@@ -334,8 +354,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupRestart',
 						sound: 'soundRestart',
 						voice: 'voiceRestart',
+						voiceText: 'voiceTextRestart',
 						label: '需要重启 DSH',
-						help: 'agent 最后一条消息提到要重启 DSH 时提醒；命中时不再额外响「本轮结束」。默认不弹窗。',
+						help: '改动要重启才生效',
 					},
 					{
 						kind: 'awaiting-test',
@@ -343,8 +364,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupAwaitingTest',
 						sound: 'soundAwaitingTest',
 						voice: 'voiceAwaitingTest',
+						voiceText: 'voiceTextAwaitingTest',
 						label: '任务到「待人工测试」',
-						help: '调度器把任务包推进到待人工测试时提醒（写 03-开发协同/<任务>/状态.md 时识别）。默认开启。',
+						help: '状态文件翻到待测',
 					},
 					{
 						kind: 'turn-end',
@@ -352,8 +374,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupTurnEnd',
 						sound: 'soundTurnEnd',
 						voice: 'voiceTurnEnd',
+						voiceText: 'voiceTextTurnEnd',
 						label: '每一轮结束都提醒',
-						help: '默认关闭；勾选后每轮跑完都响一次。默认不弹窗，避免每轮都打断。',
+						help: '默认关，避免每轮打断',
 					},
 					{
 						kind: 'turn-interrupt',
@@ -361,8 +384,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupTurnInterrupt',
 						sound: 'soundTurnInterrupt',
 						voice: 'voiceTurnInterrupt',
-						label: '本轮中断时提醒（手动打断）',
-						help: '默认关闭。',
+						voiceText: 'voiceTextInterrupt',
+						label: '本轮中断时提醒',
+						help: '手动打断时',
 					},
 					{
 						kind: 'turn-error',
@@ -370,8 +394,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupTurnError',
 						sound: 'soundTurnError',
 						voice: 'voiceTurnError',
-						label: '本轮报错时提醒（异常结束）',
-						help: '默认打开。',
+						voiceText: 'voiceTextError',
+						label: '本轮报错时提醒',
+						help: '异常结束',
 					},
 					{
 						kind: 'stalled',
@@ -379,8 +404,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupStalled',
 						sound: 'soundStalled',
 						voice: 'voiceStalled',
+						voiceText: 'voiceTextStalled',
 						label: 'Agent 停下来且没有后续动作',
-						help: '一轮正常结束、但没调用任何工具也没请你裁决时提醒；默认开启。',
+						help: '没调工具也没问你',
 					},
 					{
 						kind: 'test',
@@ -388,8 +414,9 @@ window.__ModuleLoader__.load({
 						popup: 'popupTest',
 						sound: 'soundTest',
 						voice: 'voiceTest',
+						voiceText: 'voiceTextTest',
 						label: '手工测试提醒',
-						help: '默认开启；取消后这一行的 ▶ 试听也不会响。',
+						help: '试听按钮走这一行',
 					},
 				],
 			},
@@ -398,14 +425,6 @@ window.__ModuleLoader__.load({
 				title: '批量测试协调',
 				desc: '多个任务包先开发、最后一起实测时，用这里的规则把提醒收敛成一次。「协议模式」为「严格模式」时，agent 用 [[ALARM:TEST:任务名]] 标签决定什么时候提醒；「默认模式」下标签照样生效，没写标签时状态文件相位判定还会兜底。',
 				fields: [
-					{
-						key: 'protocolMode',
-						type: 'radio',
-						label: '协议模式',
-						options: PROTOCOL_MODE_OPTIONS,
-						fallback: 'tag-first',
-						help: '默认模式：标签优先，没写标签时用旧判定兜底；严格模式：只认标签（需先发协议）。',
-					},
 					{
 						key: 'awaitingTestScope',
 						type: 'select',
@@ -450,32 +469,22 @@ window.__ModuleLoader__.load({
 				id: 'sound',
 				title: '铃声',
 				fields: [
-					{ key: 'sound', type: 'select', label: '铃声文件', source: 'wavs', help: '来自 C:\\Windows\\Media 的系统铃声。' },
-					{ key: 'soundRepeats', type: 'number', label: '重复次数', min: 1, max: 5, step: 1, suffix: '次' },
+					{
+						// `type:'sound'`：行内控件自带「系统铃声 / 自定义文件…」两种形态（见 `SoundFieldRow`），
+						// 所以不用通用 `select`——它还要带上传与试听两个动作。
+						key: 'sound',
+						type: 'sound',
+						label: '铃声',
+						help: '系统自带铃声（C:\\Windows\\Media\\*.wav）或自定义 .wav 文件。只支持 .wav；文件不存在或读不到时会自动退回系统提示音。',
+					},
+					{ key: 'soundRepeats', type: 'number', label: '重复次数', min: 1, max: 5, step: 1, suffix: '次', help: '1–5 次，间隔 0.25 秒。' },
 				],
 			},
 			{
 				id: 'voice',
 				title: '语音播报（TTS）',
-				desc: '每条提醒念什么由下面各项定；某条播报文本留空时用最下面的兜底模板。',
+				desc: '念什么由条件表最后一列（播报文本）逐条决定；某条留空时用下面的兜底文本。',
 				fields: [
-					{ key: 'voiceTextAsk', type: 'text', label: '「需要你裁决」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextPlan', type: 'text', label: '「需要你确认计划」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextTaskComplete', type: 'text', label: '「全部任务完成」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextTurnEnd', type: 'text', label: '「每一轮结束」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextInterrupt', type: 'text', label: '「本轮中断」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextError', type: 'text', label: '「本轮报错」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextStalled', type: 'text', label: '「Agent 停下来」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextAwaitingTest', type: 'text', label: '「任务到待人工测试」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextRestart', type: 'text', label: '「需要重启 DSH」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{ key: 'voiceTextTest', type: 'text', label: '「手工测试提醒」播报文本', help: VOICE_TEXT_HELP, wide: true },
-					{
-						key: 'voiceText',
-						type: 'text',
-						label: '兜底播报模板',
-						help: '上面某条留空时用这条（{title}/{body}）。',
-						wide: true,
-					},
 					{
 						key: 'voiceName',
 						type: 'select',
@@ -484,24 +493,21 @@ window.__ModuleLoader__.load({
 						emptyLabel: '系统默认语音',
 						help: '名字带 Neural 的音色由第三方 VoiceGardenSAPI 提供、需要联网；联网失败时会自动改用本机离线音色。',
 					},
-					{ key: 'voiceRate', type: 'number', label: '语速', min: -5, max: 5, step: 1, help: '-5 最慢，5 最快。' },
-					{ key: 'voiceVolume', type: 'number', label: '音量', min: 0, max: 100, step: 5, suffix: '%' },
+					{
+						key: 'voiceText',
+						type: 'text',
+						label: '兜底文本',
+						help: '某个条件没填播报文本时用这一句（{title}/{body}）。',
+						wide: true,
+					},
+					{ key: 'voiceRate', type: 'number', label: '语速', min: -5, max: 5, step: 1, help: '-5 最慢，5 最快；0 = 系统默认。' },
+					{ key: 'voiceVolume', type: 'number', label: '音量', min: 0, max: 100, step: 5, suffix: '%', help: '0 = 静音，100 = 系统默认音量。' },
 				],
 			},
 			{
 				id: 'throttle',
 				title: '节流',
 				fields: [
-					{
-						key: 'minTurnSeconds',
-						type: 'number',
-						label: '只有本轮耗时 ≥（秒）才提醒结束',
-						help: '0 = 不限制；只对「本轮结束」生效。',
-						min: 0,
-						max: 86400,
-						step: 1,
-						suffix: '秒',
-					},
 					{
 						key: 'throttleSeconds',
 						type: 'number',
@@ -521,6 +527,16 @@ window.__ModuleLoader__.load({
 						suffix: '秒',
 						help: 'ask 之后紧接着的 idle / turn-end 是同一件事，避免连响两次。',
 					},
+					{
+						key: 'minTurnSeconds',
+						type: 'number',
+						label: '只有本轮耗时 ≥（秒）才提醒结束',
+						help: '0 = 不限制；只对「本轮结束」生效。',
+						min: 0,
+						max: 86400,
+						step: 1,
+						suffix: '秒',
+					},
 				],
 			},
 		];
@@ -529,18 +545,21 @@ window.__ModuleLoader__.load({
 		// 配置结构自愈（页面快照比服务端旧时的检测 + 合并）
 		// ------------------------------------------------------------------
 
-		/** 把 SECTIONS 摊平成「键 → 字段类型」（bool / number / select / radio / text），顺序稳定。
+		/** 把 SECTIONS 摊平成「键 → 字段类型」（bool / number / select / segmented / sound / text），
+		 *  顺序稳定。
 		 *
 		 *  **为什么从 SECTIONS 反推而不是手写键表**：宿主 `coerceValues()` 遍历的是服务端
 		 *  `FIELDS` 的每一个键，缺一个就整体返回 null → `400 invalid values payload`。
 		 *  客户端要知道「页面上这份 values 够不够 72 个键」，唯一的真源就是渲染用的同一份
-		 *  SECTIONS（条件表每行 4 个 bool + 4 个通道总开关 + 各分区 fields）。
+		 *  SECTIONS（条件表每行 4 个 bool + 1 个播报文本 + 4 个通道总开关 + 各分区 fields）。
 		 *  手写第二份键表必然与 SECTIONS 走偏，下次加字段又要改两处。
 		 *
 		 *  **标题行的 `SLOT_FIELDS` 也要摊进来**：它们不渲染在某个分区里（是标题行的三个
 		 *  勾选框），但同样是 FIELDS 里的字段——漏掉就等于「缺 3 个键」自愈检测永远报 0，
 		 *  页面快照旧了也不会自动补齐。
-		 */
+		 *
+		 *  **条件行的播报文本（`row.voiceText`）也必须摊进来**：那十个 `voiceText*` 字段已经从
+		 *  TTS 分区上移到条件表最后一列，只从 `section.fields` 取会少 10 个键 → 保存必然 400。 */
 		function fieldSpecOf(sections) {
 			const spec = new Map();
 			for (const slot of SLOT_FIELDS) spec.set(slot.key, 'bool');
@@ -548,6 +567,7 @@ window.__ModuleLoader__.load({
 				for (const column of CONDITION_COLUMNS) spec.set(column.toggleKey, 'bool');
 				for (const row of section.rows ?? []) {
 					for (const column of CONDITION_COLUMNS) spec.set(row[column.id], 'bool');
+					spec.set(row.voiceText, 'text');
 				}
 				for (const field of section.fields ?? []) spec.set(field.key, field.type);
 			}
@@ -583,14 +603,16 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 合并时判断「本地这一项能不能盖到新快照上」：类型对得上才算合法。
-		 *  bool 要布尔、number 要有限数字、字符串类要字符串（下拉 / 单选还要求非空）。
+		 *  bool 要布尔、number 要有限数字、字符串类要字符串（下拉 / 分段控件还要求非空）。
 		 *  类型不对就当没有——宁可回到服务端的新值，也不要把页面里的半成品发回去
 		 *  让 `coerceValues()` 再整体 400 一次。 */
 		function isUsableValue(kind, value) {
 			if (kind === 'bool') return typeof value === 'boolean';
 			if (kind === 'number') return typeof value === 'number' && Number.isFinite(value);
 			if (kind === 'select') return typeof value === 'string' && value !== '';
-			if (kind === 'radio') return typeof value === 'string' && value !== '';
+			if (kind === 'segmented') return typeof value === 'string' && value !== '';
+			// 铃声允许空串（自定义路径清空的那一刻）：宿主对 `kind:'string'` 只要求是字符串。
+			if (kind === 'sound') return typeof value === 'string';
 			if (kind === 'text') return typeof value === 'string';
 			return false;
 		}
@@ -638,209 +660,287 @@ window.__ModuleLoader__.load({
 		// 样式（全部走 DSH 的 CSS 变量，取不到时回落中性色）
 		// ------------------------------------------------------------------
 
+		/** 颜色底座：**宿主 CSS 变量优先**（深浅色跟着 DSH 走），取不到时用中性色兜底。
+		 *  品牌蓝 / 危险红 / 琥珀是固定值（视觉基准的一部分，不随宿主主题变）。 */
 		const COLORS = {
-			text: 'var(--dsw-alias-text-primary, #1f2328)',
-			sub: 'var(--dsw-alias-text-secondary, #57606a)',
-			border: 'var(--dsw-alias-border-default, #d0d7de)',
+			text: 'var(--dsw-alias-text-primary, #111827)',
+			sub: 'var(--dsw-alias-text-secondary, #6b7280)',
+			border: 'var(--dsw-alias-border-default, rgba(128,128,128,.22))',
 			bg: 'var(--dsw-alias-bg-elevated, #ffffff)',
-			field: 'var(--dsw-alias-bg-default, #f6f8fa)',
-			accent: 'var(--dsw-alias-accent-default, #0969da)',
+			field: 'var(--dsw-alias-bg-default, rgba(128,128,128,.06))',
+			accent: 'var(--dsw-alias-accent-default, #4d6bfe)',
 			ok: 'var(--dsw-alias-state-success, #1a7f37)',
-			bad: 'var(--dsw-alias-state-error, #cf222e)',
+			bad: 'var(--dsw-alias-state-error, #dc2626)',
 		};
 
-		const STYLE = {
-			card: {
-				border: `1px solid ${COLORS.border}`,
-				borderRadius: 10,
-				background: COLORS.bg,
-				padding: '16px 18px',
-				marginBottom: 14,
-			},
-			cardTitle: { fontSize: 14, fontWeight: 600, color: COLORS.text, margin: '0 0 10px' },
-			row: {
-				display: 'flex',
-				alignItems: 'flex-start',
-				gap: 12,
-				padding: '7px 0',
-				borderTop: `1px solid ${COLORS.border}`,
-			},
-			label: { flex: '0 0 240px', fontSize: 13, color: COLORS.text, lineHeight: '20px' },
-			help: { display: 'block', fontSize: 11.5, color: COLORS.sub, marginTop: 2, lineHeight: '16px' },
-			control: { flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 },
-			/** 「条件」行：试听列 44px + 标签列 1fr + 四个通道列（各固定 64px）。
-			 *  最左的 44px 是每行的「▶ 试听」按钮列（表头那格是空的）；
-			 *  四条通道列固定宽度（不随内容变），所以每行复选框与列名严格对齐；
-			 *  标签列 minmax(140px, 1fr) 保证窄屏下先收缩换行、列不塌陷
-			 *  （四列合计 256px + 44px 试听列 + 间隔，窄屏时表格内部横向滚动，不挤掉标签）。 */
-			condRow: {
-				display: 'grid',
-				gridTemplateColumns: '44px minmax(140px, 1fr) repeat(4, 64px)',
-				alignItems: 'start',
-				gap: 12,
-				padding: '7px 0',
-				borderTop: `1px solid ${COLORS.border}`,
-			},
-			/** 「条件」区列名行（列宽与 condRow 完全一致：试听 + 条件 + 4 条通道）。 */
-			condHead: {
-				display: 'grid',
-				gridTemplateColumns: '44px minmax(140px, 1fr) repeat(4, 64px)',
-				alignItems: 'end',
-				gap: 12,
-				padding: '10px 0 2px',
-				fontSize: 11.5,
-				color: COLORS.sub,
-				lineHeight: '16px',
-			},
-			/** 条件表的滚动容器：列宽固定、总宽超出时横向滚动，窄屏下标签换行而不塌列。 */
-			condTable: { overflowX: 'auto', overscrollBehaviorX: 'contain' },
-			condHeadCell: { textAlign: 'center' },
-			/** 表头通道单元格里的「总开关复选框 + 列名」：竖排居中对齐，
-			 *  外层是 label，点列名也能切换（复选框本身仍带 aria-label）。 */
-			condHeadToggle: {
-				display: 'flex',
-				flexDirection: 'column',
-				alignItems: 'center',
-				gap: 2,
-				cursor: 'pointer',
-			},
-			condLabelCell: { minWidth: 0, fontSize: 13, color: COLORS.text, lineHeight: '20px' },
-			condCell: { display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, paddingTop: 2 },
-			input: {
-				width: '100%',
-				boxSizing: 'border-box',
-				fontSize: 13,
-				padding: '5px 8px',
-				borderRadius: 6,
-				border: `1px solid ${COLORS.border}`,
-				background: COLORS.field,
-				color: COLORS.text,
-				fontFamily: 'inherit',
-			},
-			number: {
-				width: 110,
-				boxSizing: 'border-box',
-				fontSize: 13,
-				padding: '5px 8px',
-				borderRadius: 6,
-				border: `1px solid ${COLORS.border}`,
-				background: COLORS.field,
-				color: COLORS.text,
-				fontFamily: 'inherit',
-			},
-			button: {
-				fontSize: 13,
-				padding: '6px 14px',
-				borderRadius: 6,
-				border: `1px solid ${COLORS.border}`,
-				background: COLORS.field,
-				color: COLORS.text,
-				cursor: 'pointer',
-				fontFamily: 'inherit',
-			},
-			primary: {
-				fontSize: 13,
-				padding: '6px 16px',
-				borderRadius: 6,
-				border: `1px solid ${COLORS.accent}`,
-				background: COLORS.accent,
-				color: '#ffffff',
-				cursor: 'pointer',
-				fontFamily: 'inherit',
-			},
-			status: { fontSize: 12, marginLeft: 10, alignSelf: 'center' },
-			suffix: { fontSize: 12, color: COLORS.sub },
-			/** 标题行里那三个「注册范围」勾选框的外壳：一行横排、小字。
-			 *  `marginRight:'auto'` 从这里开始撑开——标题与勾选框在左、按钮组在右（原来由标题撑开）。 */
-			slotToggles: {
-				display: 'flex',
-				alignItems: 'center',
-				gap: 8,
-				fontSize: 12.5,
-				color: COLORS.sub,
-				marginRight: 'auto',
-			},
-			/** 单个勾选项（label 包住复选框 + 文案，点文案也能切换；**复选框本身不加样式**）。 */
-			slotToggle: { display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
-			/** 单选组（`type:'radio'` 的字段）：横向排列，选项多时换行。 */
-			radioGroup: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' },
-			/** 单个单选项：外壳做气泡的定位容器（`position:'relative'`），点 `?` 的气泡相对它展开。 */
-			radioItem: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
-			radioLabel: {
-				display: 'inline-flex',
-				alignItems: 'center',
-				gap: 6,
-				fontSize: 13,
-				color: COLORS.text,
-				lineHeight: '20px',
-				cursor: 'pointer',
-			},
-			/** `?` 图标的外壳：气泡以它为定位基准（`position:'relative'`）。 */
-			tipWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
-			/** 选项后面的 `?` 图标：12px 圆形、1px 边框、可点击（键盘 Tab 可达，`:focus-visible` 走浏览器默认）。 */
-			tipBadge: {
-				display: 'inline-flex',
-				alignItems: 'center',
-				justifyContent: 'center',
-				width: 15,
-				height: 15,
-				marginLeft: 6,
-				borderRadius: '50%',
-				border: `1px solid ${COLORS.border}`,
-				fontSize: 12,
-				lineHeight: '12px',
-				color: COLORS.sub,
-				cursor: 'pointer',
-				userSelect: 'none',
-			},
-			/** 点开的说明气泡：相对所属选项行定位，够宽但不撑破卡片（`whiteSpace:'pre-line'` 保留换行）。 */
-			tipBubble: {
-				position: 'absolute',
-				top: '100%',
-				left: 0,
-				zIndex: 10,
-				marginTop: 6,
-				maxWidth: 360,
-				padding: '8px 10px',
-				borderRadius: 8,
-				border: `1px solid ${COLORS.border}`,
-				background: COLORS.bg,
-				color: COLORS.text,
-				boxShadow: '0 6px 18px rgba(0, 0, 0, 0.18)',
-				fontSize: 12.5,
-				lineHeight: '18px',
-				whiteSpace: 'pre-line',
-			},
-		};
+		/** 组件样式表：**一次注入、只按类名套用**。
+		 *
+		 *  为什么是 CSS 而不是行内 style：开关的白色圆点（`::after`）、分段控件的滑块过渡、
+		 *  `:hover` / `:focus-visible` 这些都要伪元素或伪类，行内样式一个都做不到。
+		 *  `.ala-root` / `.ala-dialog` 上挂一组 `--a-*` 局部变量，值从 `COLORS` 取（宿主变量优先），
+		 *  所以下面每条规则只写 `var(--a-*)`，深浅色适配不用写两遍。
+		 *  类名统一加 `ala-` 前缀：宿主页面里 `head` / `card` / `btn` 这类通用名很容易撞。 */
+		const ALARM_CSS = `
+.ala-root,
+.ala-dialog {
+  --a-brand: #4d6bfe;
+  --a-brand-hover: #3f5cf0;
+  --a-brand-soft: rgba(77, 107, 254, .14);
+  --a-text: ${COLORS.text};
+  --a-sub: ${COLORS.sub};
+  --a-surface: ${COLORS.bg};
+  --a-fill: ${COLORS.field};
+  --a-line: rgba(128, 128, 128, .22);
+  --a-line-strong: rgba(128, 128, 128, .34);
+  --a-fill-2: rgba(128, 128, 128, .14);
+  --a-ok: ${COLORS.ok};
+  --a-danger: #dc2626;
+  --a-danger-bg: rgba(220, 38, 38, .08);
+  --a-danger-line: rgba(220, 38, 38, .38);
+  --a-amber: #b45309;
+  --a-amber-bg: rgba(245, 158, 11, .16);
+  --a-amber-line: rgba(217, 119, 6, .42);
+  --a-radius-s: 8px;
+  --a-radius-m: 10px;
+  --a-radius-l: 12px;
+  --a-shadow: 0 18px 48px rgba(0, 0, 0, .28);
+}
+.ala-root,
+.ala-root * { box-sizing: border-box; }
+.ala-root {
+  display: flex;
+  flex-direction: column;
+  color: var(--a-text);
+  background: var(--a-surface);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ala-root.ala-standalone { border: 1px solid var(--a-line); border-radius: var(--a-radius-l); overflow: hidden; }
+.ala-root.ala-fill { flex: 1 1 auto; min-height: 0; max-height: 100%; }
 
-		/** 条件行最左列的「▶ 试听」按钮：STYLE.button 的紧凑版（不把行撑高）。 */
-		STYLE.auditionButton = {
-			...STYLE.button,
-			padding: '2px 6px',
-			fontSize: 12,
-			cursor: 'pointer',
-			lineHeight: 1,
-		};
+/* ---- 标题行 ---- */
+.ala-head { display: flex; align-items: center; gap: 12px; row-gap: 8px; flex-wrap: wrap; flex: 0 0 auto; padding: 14px 16px 12px; border-bottom: 1px solid var(--a-line); }
+.ala-title { font-size: 15.5px; font-weight: 600; letter-spacing: .2px; white-space: nowrap; }
+.ala-slots { display: inline-flex; align-items: center; gap: 14px; margin-left: 6px; }
+.ala-slots-prefix { font-size: 12.5px; color: var(--a-sub); }
+.ala-slot { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1; color: var(--a-text); cursor: pointer; user-select: none; }
+.ala-slot input { width: 14px; height: 14px; margin: 0; accent-color: var(--a-brand); cursor: pointer; }
+.ala-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ---- 按钮 ---- */
+.ala-btn {
+  font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1;
+  padding: 8px 14px; border-radius: var(--a-radius-s);
+  border: 1px solid var(--a-line); background: var(--a-fill); color: var(--a-text);
+  cursor: pointer; white-space: nowrap;
+  transition: background .18s, border-color .18s, color .18s, transform .06s;
+}
+.ala-btn:hover:not(:disabled) { background: var(--a-fill-2); border-color: var(--a-line-strong); }
+.ala-btn:active:not(:disabled) { transform: translateY(1px); }
+.ala-btn:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 1px; }
+.ala-btn:disabled { opacity: .5; cursor: not-allowed; }
+.ala-btn-primary { background: var(--a-brand); border-color: var(--a-brand); color: #fff; }
+.ala-btn-primary:hover:not(:disabled) { background: var(--a-brand-hover); border-color: var(--a-brand-hover); }
+.ala-btn-amber { background: var(--a-amber-bg); border-color: var(--a-amber-line); color: var(--a-amber); }
+.ala-btn-amber:hover:not(:disabled) { background: rgba(245, 158, 11, .30); border-color: var(--a-amber-line); }
+.ala-icon-btn {
+  width: 30px; height: 30px; padding: 0; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--a-radius-s); border: 1px solid var(--a-danger-line);
+  background: var(--a-danger-bg); color: var(--a-danger);
+  cursor: pointer; font-size: 15px; line-height: 1;
+}
+.ala-icon-btn:hover { background: rgba(220, 38, 38, .16); }
+.ala-icon-btn:focus-visible { outline: 2px solid var(--a-danger); outline-offset: 1px; }
+
+/* ---- 正文 / 分区 ---- */
+.ala-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 12px 16px 18px; }
+.ala-section { margin-top: 16px; }
+.ala-section:first-child { margin-top: 4px; }
+.ala-section-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.ala-section-title { font-size: 13px; font-weight: 600; }
+.ala-desc { font-size: 12px; line-height: 18px; color: var(--a-sub); margin: 0 0 10px; }
+.ala-panel { padding: 10px 12px 12px; border-radius: var(--a-radius-m); border: 1px solid var(--a-line); background: var(--a-fill); }
+
+/* ---- 字段行（左侧标题 + 右侧控件）---- */
+.ala-field { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; align-items: start; padding: 10px 0; border-top: 1px solid var(--a-line); }
+.ala-field:first-child { border-top: 0; }
+.ala-field-label { font-size: 13px; line-height: 20px; }
+.ala-field-help { display: block; margin-top: 3px; font-size: 11.5px; line-height: 16px; color: var(--a-sub); }
+.ala-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ala-control-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
+.ala-input, .ala-select {
+  font: inherit; font-size: 12.5px; width: 100%; min-width: 0;
+  padding: 7px 10px; border-radius: var(--a-radius-s);
+  border: 1px solid var(--a-line); background: var(--a-surface); color: var(--a-text);
+  transition: border-color .18s, box-shadow .18s;
+}
+.ala-input:focus, .ala-select:focus {
+  outline: none; border-color: rgba(77, 107, 254, .6); box-shadow: 0 0 0 3px var(--a-brand-soft);
+}
+.ala-input.ala-input-num { width: 110px; flex: 0 0 auto; }
+.ala-inline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ala-inline .ala-input { flex: 1 1 240px; }
+.ala-inline > .ala-btn { flex: 0 0 auto; }
+.ala-unit { font-size: 12px; color: var(--a-sub); }
+.ala-file-input { display: none; }
+
+/* ---- 分段控件（协议模式）---- */
+.ala-seg { position: relative; display: inline-flex; align-items: center; padding: 2px; border-radius: 999px; background: var(--a-fill-2); }
+.ala-seg-thumb {
+  position: absolute; top: 2px; left: 2px; height: calc(100% - 4px);
+  border-radius: 999px; background: var(--a-brand);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+  transition: transform .22s cubic-bezier(.4, 0, .2, 1), width .22s cubic-bezier(.4, 0, .2, 1);
+}
+.ala-seg-opt {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px; white-space: nowrap;
+  font-size: 12px; font-weight: 600; line-height: 1; color: var(--a-sub);
+  cursor: pointer; transition: color .18s, background-color .18s;
+}
+.ala-seg-opt[data-selected="true"] { color: #fff; }
+.ala-seg-opt[data-selected="false"]:hover { color: var(--a-brand); }
+/* 量不到宽度时的退化形态：选中项自己上底色（仍带过渡），滑块不渲染。 */
+.ala-seg-opt[data-selected="true"][data-fallback="true"] { background: var(--a-brand); color: #fff; }
+.ala-seg-opt:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
+
+/* ---- 说明徽标（问号）与气泡 ---- */
+.ala-tip { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.ala-tip-badge {
+  width: 15px; height: 15px; border-radius: 999px; border: 1px solid currentColor;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; opacity: .8;
+}
+.ala-tip-badge:hover { opacity: 1; }
+.ala-tip-badge:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 2px; }
+.ala-tip-bubble {
+  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: 340px; max-width: min(340px, 70vw); padding: 10px 12px;
+  border-radius: var(--a-radius-m); border: 1px solid var(--a-line);
+  background: var(--a-surface); color: var(--a-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
+  font-size: 12.5px; line-height: 18px; white-space: pre-line; z-index: 5;
+}
+
+/* ---- 条件表：▶ | 条件 | 提醒 弹窗 铃声 语音播报 | 播报文本 ---- */
+.ala-table { border-top: 1px solid var(--a-line); overflow-x: auto; overscroll-behavior-x: contain; }
+.ala-thead, .ala-trow {
+  display: grid;
+  grid-template-columns: 36px minmax(118px, 1fr) repeat(4, 50px) minmax(170px, 210px);
+  gap: 10px;
+}
+.ala-thead {
+  grid-template-rows: auto auto; row-gap: 6px; align-items: center;
+  padding: 10px 0 6px; border-bottom: 1px solid var(--a-line);
+  font-size: 11.5px; color: var(--a-sub); line-height: 16px; text-align: center;
+}
+.ala-th-label, .ala-th-voice { text-align: left; }
+.ala-th-master { text-align: center; }
+.ala-trow { align-items: start; padding: 9px 0; border-bottom: 1px solid var(--a-line); }
+.ala-trow:last-child { border-bottom: 0; }
+.ala-play {
+  width: 28px; height: 28px; border-radius: var(--a-radius-s);
+  border: 1px solid var(--a-line); background: var(--a-surface); color: var(--a-sub);
+  cursor: pointer; font-size: 11px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color .18s, border-color .18s, background .18s;
+}
+.ala-play:hover:not(:disabled) { color: var(--a-brand); border-color: rgba(77, 107, 254, .5); background: rgba(77, 107, 254, .08); }
+.ala-play:focus-visible { outline: 2px solid var(--a-brand); outline-offset: 1px; }
+.ala-play:disabled { opacity: .5; cursor: not-allowed; }
+.ala-name { font-size: 13px; line-height: 20px; min-width: 0; }
+.ala-help { display: block; margin-top: 2px; font-size: 11.5px; line-height: 16px; color: var(--a-sub); }
+.ala-cell-center { display: flex; align-items: center; justify-content: center; min-width: 0; padding-top: 2px; }
+
+/* ---- 开关（34×20 轨道 + 16 白点）---- */
+.ala-switch { position: relative; display: flex; justify-content: center; align-items: center; min-width: 0; padding-top: 2px; }
+.ala-switch.ala-switch-start { justify-content: flex-start; }
+.ala-switch input {
+  position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
+  width: 34px; height: 20px; margin: 0; opacity: 0; cursor: pointer; z-index: 1;
+}
+.ala-switch.ala-switch-start input { left: 17px; }
+.ala-switch .ala-track {
+  position: relative; width: 34px; height: 20px; flex: 0 0 auto;
+  border-radius: 999px; background: rgba(128, 128, 128, .28);
+  cursor: pointer; transition: background .18s;
+}
+.ala-switch .ala-track::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 999px; background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .22); transition: transform .18s;
+}
+.ala-switch input:checked + .ala-track { background: var(--a-brand); }
+.ala-switch input:checked + .ala-track::after { transform: translateX(14px); }
+.ala-switch input:focus-visible + .ala-track { outline: 2px solid var(--a-brand); outline-offset: 2px; }
+.ala-switch input:disabled + .ala-track { opacity: .45; cursor: not-allowed; }
+
+/* ---- 条件行里的播报文本框 ---- */
+.ala-voice-input {
+  font: inherit; font-size: 12px; width: 100%; min-width: 0;
+  padding: 6px 8px; border-radius: var(--a-radius-s);
+  border: 1px solid var(--a-line); background: var(--a-surface); color: var(--a-text);
+  transition: border-color .18s, box-shadow .18s, opacity .18s;
+}
+.ala-voice-input:focus { outline: none; border-color: rgba(77, 107, 254, .6); box-shadow: 0 0 0 3px var(--a-brand-soft); }
+.ala-voice-input:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---- 底部状态栏 ---- */
+.ala-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 10px 16px 14px; border-top: 1px solid var(--a-line); font-size: 12px; color: var(--a-sub); }
+.ala-foot-spacer { flex: 1 1 auto; }
+.ala-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.ala-status-ok { color: var(--a-ok); }
+.ala-status-bad { color: var(--a-danger); }
+.ala-status .ala-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: 0 0 auto; }
+.ala-loading { padding: 18px 16px; font-size: 13px; color: var(--a-sub); }
+.ala-loading-bad { color: var(--a-danger); }
+
+/* ---- 弹窗（设置 / 规则共用同一套框）---- */
+.ala-frame { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.ala-dialog {
+  box-sizing: border-box; width: min(1040px, calc(100vw - 48px)); max-height: 92vh;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-radius: var(--a-radius-l); background: var(--a-surface);
+  box-shadow: var(--a-shadow); color: var(--a-text);
+}
+.ala-dialog-rules { min-height: 60vh; }
+.ala-dialog-body { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; padding: 12px 16px 16px; }
+.ala-rule-text {
+  flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; resize: none;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 18px;
+  padding: 10px 12px; border-radius: var(--a-radius-s);
+  border: 1px solid var(--a-line); background: var(--a-fill); color: var(--a-text);
+}
+.ala-hint-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--a-danger); }
+.ala-hint { font-size: 12px; color: var(--a-danger); }
+.ala-muted { font-size: 11.5px; color: var(--a-sub); }
+
+/* ---- 细滚动条（只影响本插件自己的滚动区）---- */
+[data-dsh-alarm-scroll] { scrollbar-width: thin; scrollbar-color: rgba(128, 128, 128, .42) transparent; scrollbar-gutter: stable; }
+[data-dsh-alarm-scroll]::-webkit-scrollbar { width: 9px; height: 9px; }
+[data-dsh-alarm-scroll]::-webkit-scrollbar-track { background: transparent; }
+[data-dsh-alarm-scroll]::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, .4); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+[data-dsh-alarm-scroll]::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, .62); background-clip: content-box; }
+`;
+
+		/** 注入上面那张样式表（幂等：只挂一次 `<style>`）。
+		 *  DOM 不在（离线自测 / SSR）时直接返回——样式是增强，缺了也不该让组件炸。 */
+		function ensureStyle() {
+			const id = 'dsh-alarm-style';
+			if (typeof document === 'undefined' || document.getElementById(id) !== null) return;
+			const style = document.createElement('style');
+			style.id = id;
+			style.textContent = ALARM_CSS;
+			document.head.appendChild(style);
+		}
+
+		/** `useLayoutEffect` 的兜底：分段滑块要在**绘制前**量好宽度，否则首帧会闪一下等宽形态。 */
+		const usePrePaintEffect = typeof React.useLayoutEffect === 'function' ? React.useLayoutEffect : React.useEffect;
 
 		// ------------------------------------------------------------------
 		// 小组件
 		// ------------------------------------------------------------------
-
-		/** 注入与 DSH 一致的细滚动条样式（只影响本插件自己的滚动区）。 */
-		function ensureScrollStyle() {
-			const id = 'dsh-alarm-scroll-style';
-			if (typeof document === 'undefined' || document.getElementById(id) !== null) return;
-			const style = document.createElement('style');
-			style.id = id;
-			style.textContent = [
-				'[data-dsh-alarm-scroll]{scrollbar-width:thin;scrollbar-color:rgba(128,128,128,.42) transparent;scrollbar-gutter:stable}',
-				'[data-dsh-alarm-scroll]::-webkit-scrollbar{width:9px;height:9px}',
-				'[data-dsh-alarm-scroll]::-webkit-scrollbar-track{background:transparent}',
-				'[data-dsh-alarm-scroll]::-webkit-scrollbar-thumb{background:rgba(128,128,128,.4);border-radius:5px;border:2px solid transparent;background-clip:content-box}',
-				'[data-dsh-alarm-scroll]::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.62);background-clip:content-box}',
-			].join('\n');
-			document.head.appendChild(style);
-		}
 
 		/** 复选框的可访问名称：取标签里全角括号前的部分（「提醒：需要你裁决」）。
 		 *  标签里的括号补充说明是给人看的，念出来太啰嗦，故从 aria-label 里去掉。 */
@@ -865,52 +965,61 @@ window.__ModuleLoader__.load({
 			return String(kind);
 		}
 
-		/** 条件行里的一个复选框（原生 input，自带键盘可达）。 */
-		function ConditionBox(props) {
-			const { name, label, checked, onToggle } = props;
-			return h('input', {
-				type: 'checkbox',
-				name,
-				'aria-label': label,
-				checked: checked === true,
-				onChange: (event) => onToggle(event.target.checked),
-			});
+		/** 开关（34×20 轨道 + 16 白圆点）：`input` 视觉隐藏但**仍在 Tab 序列里**，
+		 *  `:focus-visible` 时轨道有描边（伪类只能写在 CSS 里，见 ALARM_CSS）。
+		 *
+		 *  结构必须是 `input + span.ala-track` 两个**相邻**兄弟：CSS 用
+		 *  `input:checked + .ala-track` 选轨道，中间插任何节点都会让开关失效。 */
+		function ToggleSwitch(props) {
+			const { name, label, checked, onToggle, disabled, align } = props;
+			return h(
+				'label',
+				{ className: align === 'start' ? 'ala-switch ala-switch-start' : 'ala-switch' },
+				h('input', {
+					type: 'checkbox',
+					name,
+					'aria-label': label,
+					checked: checked === true,
+					disabled: disabled === true,
+					onChange: (event) => onToggle(event.target.checked),
+				}),
+				h('span', { className: 'ala-track', 'aria-hidden': true }),
+			);
 		}
 
-		/** 「条件」区的列名行（只在条件表里渲染：试听 + 条件 + 四条通道）。
-		 *  最左的试听列没有总开关，留空占位（该格 aria-hidden）；
-		 *  四个通道列各带一个复选框，它就是这条通道的总开关
-		 *  （提醒→enabled、弹窗→popup、铃声→soundEnabled、语音播报→voice）。
-		 *  列名文字对读屏是冗余信息（复选框自带「总开关：xx」的 aria-label），只服务于视觉对齐；
-		 *  但这一行现在**有**可交互控件，所以不能再整行 aria-hidden。
+		/** 条件表的表头：**两行**。
+		 *
+		 *  第一行只放四个通道的总开关（网格前七格里的四格，开关居中对齐各自列宽）；
+		 *  第二行是全部文字标签（条件 / 提醒 / 弹窗 / 铃声 / 语音播报 / 播报文本）。
+		 *  列宽在 CSS 里（`grid-template-columns: 36px minmax(118px,1fr) repeat(4,50px) minmax(170px,210px)`），
+		 *  表头与数据行共用同一份，所以开关与列名严格对得上。
 		 *  **渲染体**：外面包了 `React.memo`（见下方 `ConditionHeaderRow`），别直接当组件用。 */
 		function ConditionHeaderRowBody(props) {
 			const { values, onChange } = props;
-			const cells = [
-				// 最左的「试听」列没有总开关，表头留空（纯占位对齐，读屏跳过）。
-				h('div', { key: 'audition', style: STYLE.condHeadCell, 'aria-hidden': true }),
-				h('div', { key: 'label', style: { ...STYLE.condHeadCell, textAlign: 'left' } }, '条件'),
-			];
+			const cells = [];
+			// ---- 第一行：四个通道总开关（其余列留空占位）----
+			cells.push(h('span', { key: 'r1-audition', 'aria-hidden': true }));
+			cells.push(h('span', { key: 'r1-label', 'aria-hidden': true }));
 			for (const column of CONDITION_COLUMNS) {
 				cells.push(
-					h(
-						'div',
-						{ key: column.id, style: STYLE.condHeadCell },
-						h(
-							'label',
-							{ style: STYLE.condHeadToggle },
-							h(ConditionBox, {
-								name: column.toggleKey,
-								label: column.toggleLabel,
-								checked: values[column.toggleKey] === true,
-								onToggle: (next) => onChange(column.toggleKey, next),
-							}),
-							h('span', null, column.label),
-						),
-					),
+					h(ToggleSwitch, {
+						key: `r1-${column.id}`,
+						name: column.toggleKey,
+						label: column.toggleLabel,
+						checked: values[column.toggleKey] === true,
+						onToggle: (next) => onChange(column.toggleKey, next),
+					}),
 				);
 			}
-			return h('div', { style: STYLE.condHead }, cells);
+			cells.push(h('span', { key: 'r1-voice', 'aria-hidden': true }));
+			// ---- 第二行：全部文字标签，同一行同一基线 ----
+			cells.push(h('span', { key: 'r2-audition', 'aria-hidden': true }));
+			cells.push(h('span', { key: 'r2-label', className: 'ala-th-label' }, '条件'));
+			for (const column of CONDITION_COLUMNS) {
+				cells.push(h('span', { key: `r2-${column.id}`, className: 'ala-th-master' }, column.label));
+			}
+			cells.push(h('span', { key: 'r2-voice', className: 'ala-th-voice' }, '播报文本'));
+			return h('div', { className: 'ala-thead' }, cells);
 		}
 
 		/** 列名行的比较器（`React.memo` 第二参）：只看**四个通道总开关**的布尔值与回调引用。
@@ -928,46 +1037,27 @@ window.__ModuleLoader__.load({
 			return true;
 		}
 
-		/** memo 后的列名行（渲染结果与 memo 前完全一致，只跳过无变化的重渲染）。 */
+		/** memo 后的表头（渲染结果与 memo 前完全一致，只跳过无变化的重渲染）。 */
 		const ConditionHeaderRow = React.memo(ConditionHeaderRowBody, conditionHeaderRowEqual);
 
-		/** 条件表的一行：▶ 试听按钮 + 条件名（含 help）+ 4 个复选框（提醒 / 弹窗 / 铃声 / 语音播报）。
+		/** 条件表的一行：`▶` 试听 → 条件名（含极简说明）→ 四个开关 → 播报文本输入框。
 		 *  最左的 ▶ 用**当前设置**模拟这一行的报警（只响一次，不改配置）；
-		 *  四条通道各自独立：提醒决定「这个条件响不响」，另外三列决定「响的时候用哪几条通道」，
-		 *  且都还要过对应通道的总开关（就是表头那一行的四个复选框）。
+		 *  四个开关各自独立：提醒决定「这个条件响不响」，另外三个决定「响的时候用哪几条通道」，
+		 *  且都还要过对应通道的总开关（表头第一行的四个开关）。
+		 *  最后一列是该行的 `voiceText*` 字段：**语音播报关着时置灰**（念不出来的地方不给填）。
 		 *  **渲染体**：外面包了 `React.memo`（见下方 `ConditionRow`），别直接当组件用。 */
 		function ConditionRowBody(props) {
 			const { row, values, onChange, onAudition, busy } = props;
-			// 复选框的可访问名称用整条标签（「弹窗：全部任务完成（任务级完成，不是每轮结束）」），
-			// 十个条件的提醒勾选框读起来仍能区分开。
 			const name = auditionLabel(row);
-			const cells = [];
-			for (const column of CONDITION_COLUMNS) {
-				const key = row[column.id];
-				cells.push(
-					h(
-						'div',
-						{ key: column.id, style: STYLE.condCell },
-						h(ConditionBox, {
-							name: key,
-							label: `${column.label}：${name}`,
-							checked: values[key] === true,
-							onToggle: (next) => onChange(key, next),
-						}),
-					),
-				);
-			}
-			return h(
-				'div',
-				{ style: STYLE.condRow },
+			const cells = [
 				h(
 					'div',
-					{ key: 'audition', style: STYLE.condCell },
+					{ key: 'audition', className: 'ala-cell-center' },
 					h(
 						'button',
 						{
 							type: 'button',
-							style: STYLE.auditionButton,
+							className: 'ala-play',
 							'aria-label': `试听：${name}`,
 							title: `试听：${name}`,
 							disabled: busy !== '',
@@ -978,23 +1068,50 @@ window.__ModuleLoader__.load({
 				),
 				h(
 					'div',
-					{ style: STYLE.condLabelCell },
+					{ key: 'label', className: 'ala-name' },
 					row.label,
-					row.help ? h('span', { style: STYLE.help }, row.help) : null,
+					row.help ? h('span', { className: 'ala-help' }, row.help) : null,
 				),
-				cells,
+			];
+			for (const column of CONDITION_COLUMNS) {
+				const key = row[column.id];
+				cells.push(
+					h(ToggleSwitch, {
+						key: column.id,
+						name: key,
+						label: `${column.label}：${name}`,
+						checked: values[key] === true,
+						onToggle: (next) => onChange(key, next),
+					}),
+				);
+			}
+			const voiceText = values[row.voiceText];
+			cells.push(
+				h(
+					'div',
+					{ key: 'voiceText' },
+					h('input', {
+						type: 'text',
+						className: 'ala-voice-input',
+						'aria-label': `播报文本：${name}`,
+						placeholder: '留空用兜底文本',
+						value: voiceText === undefined || voiceText === null ? '' : String(voiceText),
+						// 这一行不播报时没内容可念：置灰但保留已填的值（不要清空配置）。
+						disabled: values[row.voice] !== true,
+						onChange: (event) => onChange(row.voiceText, event.target.value),
+					}),
+				),
 			);
+			return h('div', { className: 'ala-trow' }, cells);
 		}
 
 		/** 条件行的比较器（`React.memo` 第二参）：**只有这一行自己那几格变了才重渲染**。
 		 *
-		 *  为什么需要：勾一下复选框 → `update()` → `{ ...values }` → 整棵树重渲染，
-		 *  9 行 × 4 格 + 全部字段行一次全量重建（用户实测「勾选也卡」）。这里按
-		 *  「行对象引用 + 该行四个通道键的布尔值 + 回调引用 + busy」比较后，
+		 *  为什么需要：勾一下开关 → `update()` → `{ ...values }` → 整棵树重渲染，
+		 *  10 行 × 5 格 + 全部字段行一次全量重建（用户实测「勾选也卡」）。这里按
+		 *  「行对象引用 + 该行四个通道键的布尔值 + 播报文本 + 回调引用 + busy」比较后，
 		 *  勾「弹窗：需要你裁决」只会重渲染那一行。
-		 *  键名从 `row[column.id]` 取（`CONDITION_COLUMNS` 的四个 id：alert / popup /
-		 *  sound / voice），与渲染时读的是同一份来源，不会两处走偏。
-		 *  `onChange` / `onAudition` 都是 `useCallback` 的稳定引用，不会让比较器永远失配。 */
+		 *  键名从 `row[column.id]` / `row.voiceText` 取，与渲染时读的是同一份来源，不会两处走偏。 */
 		function conditionRowEqual(a, b) {
 			if (a === b) return true;
 			if (a.row !== b.row) return false;
@@ -1007,6 +1124,9 @@ window.__ModuleLoader__.load({
 				const key = a.row[column.id];
 				if ((va[key] === true) !== (vb[key] === true)) return false;
 			}
+			const ta = va[a.row.voiceText];
+			const tb = vb[a.row.voiceText];
+			if (String(ta ?? '') !== String(tb ?? '')) return false;
 			return true;
 		}
 
@@ -1023,13 +1143,14 @@ window.__ModuleLoader__.load({
 			}));
 		}
 
-		/** 标题行的三个「注册范围」勾选框（主窗口 / 插件页 / 设置页）。
+		/** 标题行「注册到：」后面那三个勾选框（主窗口 / 插件页 / 设置页）。
 		 *
 		 *  - 勾选走卡片现成的 `update()`（勾选即自动保存，400ms 防抖），不另设保存按钮。
 		 *  - **三个框任何时候都可点**（不置灰、不带 `title` 说明）：全关的组合由宿主
 		 *    `POST /config` 兜底拒绝（400 `code:"last-slot"`），再由 `persist()` 回滚 +
 		 *    弹一句提示。用户明确要走「后端拒绝 + 回滚」这条路，别把置灰那条前端口径加回来。
-		 *  - 复选框本身**不加行内样式**（排版全交给外层 label / 外壳 span）。
+		 *  - 用的是**原生方复选框**（`accent-color` 走品牌蓝），不是开关：这里是「注册到哪几处」
+		 *    的多选，方块比方圆更像多选。
 		 *
 		 * ponytail: 规则只有一处（服务端），前端不做预防性拦截。天花板：页面在回滚后
 		 *  仍然显示「已恢复上一次的设置」，但若别处同时改过配置，页面上的值可能比磁盘旧一档
@@ -1039,23 +1160,24 @@ window.__ModuleLoader__.load({
 			const items = SLOT_FIELDS.map((slot) =>
 				h(
 					'label',
-					{ key: slot.key, style: STYLE.slotToggle },
+					{ key: slot.key, className: 'ala-slot' },
 					h('input', {
 						type: 'checkbox',
 						'aria-label': slot.label,
 						checked: values?.[slot.key] === true,
 						onChange: (event) => update(slot.key, event.target.checked),
 					}),
-					slot.label,
+					h('span', null, slot.label),
 				),
 			);
-			return h('span', { style: STYLE.slotToggles }, items);
+			return h('div', { className: 'ala-slots' }, h('span', { className: 'ala-slots-prefix' }, '注册到：'), items);
 		}
 
 		/** 选项后面的 `?` 说明图标 + 点开的气泡（`role="tooltip"`）。
 		 *
 		 *  - 点击 / 回车 / 空格切换开合；开着时点**别处**也收起（document 上挂 mousedown，
 		 *    目标不在自身子树内就关）——气泡是绝对定位浮层，不收起来会盖住下面的行。
+		 *  - 点 `?` 时 `stopPropagation`：它挂在分段控件的选项里面，不拦住会顺手把选项也切了。
 		 *  - `title` 里放同一份说明，作为**悬停兜底**（未点开也能看到文案；鼠标悬停不依赖 JS）。
 		 *  - `aria-label` 用固定短名（「严格模式说明」），读屏念的是名字而不是整段说明。 */
 		function TipBadge(props) {
@@ -1076,7 +1198,7 @@ window.__ModuleLoader__.load({
 			const toggle = () => setOpen((previous) => previous !== true);
 			return h(
 				'span',
-				{ ref: rootRef, style: STYLE.tipWrap },
+				{ ref: rootRef, className: 'ala-tip' },
 				h(
 					'span',
 					{
@@ -1085,33 +1207,274 @@ window.__ModuleLoader__.load({
 						'aria-label': '严格模式说明',
 						'aria-expanded': open === true,
 						title: text,
-						style: STYLE.tipBadge,
-						onClick: toggle,
+						className: 'ala-tip-badge',
+						onClick: (event) => {
+							event?.stopPropagation?.();
+							toggle();
+						},
 						onKeyDown: (event) => {
 							if (event?.key !== 'Enter' && event?.key !== ' ') return;
-							event.preventDefault();
+							event.preventDefault?.();
+							event?.stopPropagation?.();
 							toggle();
 						},
 					},
 					'?',
 				),
-				open === true ? h('div', { role: 'tooltip', style: STYLE.tipBubble }, text) : null,
+				open === true ? h('div', { role: 'tooltip', className: 'ala-tip-bubble' }, text) : null,
 			);
 		}
 
-		/** 普通字段行（文本 / 数字 / 下拉 / 单选）。**渲染体**：外面包了 `React.memo`
-		 *  （见下方 `FieldRow`），别直接当组件用。 */
+		/** 协议模式的分段控件（灰底胶囊 + 品牌蓝滑块，选中项白字）。
+		 *
+		 *  **滑块位置靠真测量**：选中项 `offsetLeft` / `offsetWidth` → 写 `width` + `transform`，
+		 *  配合 CSS 的 `.22s` 过渡滑动。测量放在 `useLayoutEffect` 里（绘制前），
+		 *  所以首帧不会闪一下等宽形态。
+		 *  **量不到就退化**（无布局的离线渲染、`offsetWidth` 拿不到）：`thumb` 置 null →
+		 *  选中项自己上品牌蓝底色（`data-fallback` + CSS，仍带过渡）。两条路都有过渡，别删。
+		 *  点击 `?` 不算选项点击（气泡自己 `stopPropagation`）。 */
+		function ProtocolSegmented(props) {
+			const { field, value, onChange } = props;
+			const list = field.options ?? [];
+			const raw = value === undefined || value === null ? '' : String(value);
+			const known = list.some((option) => option.value === raw);
+			const current = known ? raw : (field.fallback ?? (list.length > 0 ? list[0].value : ''));
+			const [thumb, setThumb] = React.useState(null);
+			const optionRefs = React.useRef([]);
+
+			const measure = React.useCallback(() => {
+				const index = list.findIndex((option) => option.value === current);
+				const node = index >= 0 ? optionRefs.current[index] : null;
+				const width = node?.offsetWidth;
+				const left = node?.offsetLeft;
+				if (!Number.isFinite(width) || !Number.isFinite(left) || width <= 0) {
+					setThumb(null);
+					return;
+				}
+				// 减 2px：胶囊内边距是 2px，滑块自己也是从 top/left 2px 起算的。
+				setThumb({ width: `${width}px`, transform: `translateX(${left - 2}px)` });
+			}, [current, list]);
+
+			usePrePaintEffect(() => {
+				measure();
+			}, [measure]);
+
+			React.useEffect(() => {
+				if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
+				const onResize = () => measure();
+				window.addEventListener('resize', onResize);
+				return () => window.removeEventListener('resize', onResize);
+			}, [measure]);
+
+			const nodes = [];
+			if (thumb !== null) {
+				nodes.push(h('span', { key: 'thumb', className: 'ala-seg-thumb', style: thumb, 'aria-hidden': true }));
+			}
+			for (let index = 0; index < list.length; index += 1) {
+				const option = list[index];
+				const selected = option.value === current;
+				nodes.push(
+					h(
+						'span',
+						{
+							key: option.value,
+							className: 'ala-seg-opt',
+							role: 'radio',
+							'aria-checked': selected,
+							'data-selected': selected ? 'true' : 'false',
+							'data-fallback': thumb === null ? 'true' : 'false',
+							'data-value': option.value,
+							tabIndex: selected ? 0 : -1,
+							ref: (node) => {
+								optionRefs.current[index] = node;
+							},
+							onClick: () => {
+								if (option.value !== current) onChange(field.key, option.value);
+							},
+							onKeyDown: (event) => {
+								if (event?.key !== 'Enter' && event?.key !== ' ') return;
+								event.preventDefault?.();
+								if (option.value !== current) onChange(field.key, option.value);
+							},
+						},
+						option.label,
+						option.tip === undefined ? null : h(TipBadge, { text: option.tip }),
+					),
+				);
+			}
+			return h('div', { className: 'ala-seg', role: 'radiogroup', 'aria-label': field.label }, nodes);
+		}
+
+		/** 「自定义铃声」在铃声下拉里的哨兵值（不是真实文件名）。 */
+		const CUSTOM_SOUND_VALUE = '__custom__';
+
+		/** 把 `<input type=file>` 选中的文件读成 base64（去掉 `data:...;base64,` 前缀）。
+		 *  上传路由要的就是裸 base64，`FileReader.readAsDataURL` 给的带前缀，这里切掉。 */
+		function readFileAsBase64(file) {
+			return new Promise((resolve, reject) => {
+				if (typeof FileReader !== 'function') {
+					reject(new Error('当前环境不支持读取本地文件'));
+					return;
+				}
+				try {
+					const reader = new FileReader();
+					reader.onload = () => {
+						const result = String(reader.result ?? '');
+						const comma = result.indexOf(',');
+						resolve(comma >= 0 ? result.slice(comma + 1) : result);
+					};
+					reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'));
+					reader.readAsDataURL(file);
+				} catch (error) {
+					reject(error);
+				}
+			});
+		}
+
+		/** 铃声：系统铃声下拉 + 「自定义文件…」展开后的路径输入 / 浏览…（上传）/ ▶ 试听。
+		 *
+		 *  形态判定：`sound` 命中 `options.wavs`（系统铃声文件名）→ 收起自定义区；
+		 *  **不在**里面（无论是绝对路径还是别的未知名字）→ 展开，且下拉显示「自定义文件…」。
+		 *  用户主动在下拉里选「自定义文件…」时只展开、**不改配置**（等真填/真上传才写 `sound`）。
+		 *  上传成功用服务端回的 `path` 写进 `sound`（那是本机绝对路径，宿主直接拿它播）。
+		 *  ▶ 试听只响铃：`values` 用页面当前值，但强制 `popup:false, voice:false`。 */
+		function SoundFieldRow(props) {
+			const { field, value, onChange, wavs, setStatus, onAuditionSound, busy } = props;
+			const sound = value === undefined || value === null ? '' : String(value);
+			const isKnown = wavs.includes(sound);
+			/** 用户在下拉里显式选了「自定义文件…」（此时 sound 可能还是旧值）。 */
+			const [customChoice, setCustomChoice] = React.useState(false);
+			const [uploading, setUploading] = React.useState(false);
+			const fileRef = React.useRef(null);
+			const customOpen = customChoice || !isKnown;
+
+			const pick = (next) => {
+				if (next === CUSTOM_SOUND_VALUE) {
+					setCustomChoice(true);
+					return;
+				}
+				setCustomChoice(false);
+				onChange(field.key, next);
+			};
+
+			const upload = async (file) => {
+				if (file === undefined || file === null) return;
+				setUploading(true);
+				try {
+					const dataBase64 = await readFileAsBase64(file);
+					const result = await api.post('sound', { fileName: file.name, dataBase64 });
+					const path = result.ok === true ? result.value?.path : undefined;
+					if (typeof path === 'string' && path !== '') {
+						setCustomChoice(true);
+						onChange(field.key, path);
+						setStatus({ kind: 'ok', text: `已上传自定义铃声：${String(file.name ?? '')}` });
+					} else {
+						setStatus({ kind: 'bad', text: `上传失败：${result.value?.error ?? result.status}` });
+					}
+				} catch (error) {
+					setStatus({ kind: 'bad', text: `上传失败：${String(error?.message ?? error)}` });
+				} finally {
+					setUploading(false);
+				}
+			};
+
+			const choices = wavs.map((name) => h('option', { key: name, value: name }, `${name}（系统）`));
+			choices.push(h('option', { key: CUSTOM_SOUND_VALUE, value: CUSTOM_SOUND_VALUE }, '自定义文件…'));
+
+			const customBlock =
+				customOpen === true
+					? h(
+							'div',
+							{ key: 'custom', className: 'ala-inline' },
+							h('input', {
+								type: 'text',
+								className: 'ala-input',
+								'aria-label': '自定义铃声路径',
+								placeholder: '自定义铃声路径，例如 D:\\sounds\\my-alarm.wav',
+								value: sound,
+								onChange: (event) => onChange(field.key, event.target.value),
+							}),
+							h(
+								'button',
+								{
+									type: 'button',
+									className: 'ala-btn',
+									disabled: uploading === true,
+									onClick: () => fileRef.current?.click?.(),
+								},
+								uploading === true ? '上传中…' : '浏览…',
+							),
+							h(
+								'button',
+								{
+									type: 'button',
+									className: 'ala-btn',
+									'aria-label': '试听铃声',
+									disabled: busy !== '',
+									onClick: () => onAuditionSound(),
+								},
+								'▶ 试听',
+							),
+							h('input', {
+								key: 'file',
+								ref: fileRef,
+								type: 'file',
+								className: 'ala-file-input',
+								accept: '.wav',
+								tabIndex: -1,
+								'aria-hidden': true,
+								onChange: (event) => {
+									const file = event?.target?.files?.[0];
+									// 清空 value：选同一个文件第二次也要能触发 change。
+									if (event?.target) event.target.value = '';
+									void upload(file);
+								},
+							}),
+						)
+					: null;
+
+			return h(
+				'div',
+				{ className: 'ala-field' },
+				h(
+					'div',
+					null,
+					h('div', { className: 'ala-field-label' }, field.label),
+					field.help === undefined ? null : h('span', { className: 'ala-field-help' }, field.help),
+				),
+				h(
+					'div',
+					{ className: 'ala-control-col' },
+					h(
+						'select',
+						{
+							className: 'ala-select',
+							'aria-label': field.label,
+							value: customOpen === true ? CUSTOM_SOUND_VALUE : sound,
+							onChange: (event) => pick(event.target.value),
+						},
+						choices,
+					),
+					customBlock,
+				),
+			);
+		}
+
+		/** 普通字段行（文本 / 数字 / 下拉 / 开关）。**渲染体**：外面包了 `React.memo`
+		 *  （见下方 `FieldRow`），别直接当组件用。
+		 *  协议模式（`segmented`）与铃声（`sound`）各有专用组件，不走这里。 */
 		function FieldRowBody(props) {
 			const { field, value, onChange, options } = props;
 			const control = [];
 			if (field.type === 'bool') {
 				control.push(
-					h('input', {
-						key: 'box',
-						type: 'checkbox',
-						'aria-label': field.label,
+					h(ToggleSwitch, {
+						key: 'switch',
+						name: field.key,
+						label: field.label,
 						checked: value === true,
-						onChange: (event) => onChange(field.key, event.target.checked),
+						onToggle: (next) => onChange(field.key, next),
+						align: 'start',
 					}),
 				);
 			} else if (field.type === 'number') {
@@ -1119,7 +1482,8 @@ window.__ModuleLoader__.load({
 					h('input', {
 						key: 'num',
 						type: 'number',
-						style: STYLE.number,
+						className: 'ala-input ala-input-num',
+						'aria-label': field.label,
 						min: field.min,
 						max: field.max,
 						step: field.step ?? 1,
@@ -1130,7 +1494,7 @@ window.__ModuleLoader__.load({
 						},
 					}),
 				);
-				if (field.suffix) control.push(h('span', { key: 'suffix', style: STYLE.suffix }, field.suffix));
+				if (field.suffix) control.push(h('span', { key: 'suffix', className: 'ala-unit' }, field.suffix));
 			} else if (field.type === 'select') {
 				const list = options ?? field.options ?? [];
 				const choices = [];
@@ -1152,75 +1516,36 @@ window.__ModuleLoader__.load({
 						'select',
 						{
 							key: 'select',
-							style: STYLE.input,
+							className: 'ala-select',
+							'aria-label': field.label,
 							value: current,
 							onChange: (event) => onChange(field.key, event.target.value),
 						},
 						choices,
 					),
 				);
-			} else if (field.type === 'radio') {
-				const list = options ?? field.options ?? [];
-				const raw = value === undefined || value === null ? '' : String(value);
-				const known = list.some((o) => (typeof o === 'string' ? o : o.value) === raw);
-				// 读到不在选项里的值（含宿主没归一化干净的旧值）时界面按 fallback 选中，
-				// 与 select 同口径：**不写回配置**——用户不动这一项，配置里就保持原值。
-				const current = known ? raw : (field.fallback ?? (list.length > 0 ? (typeof list[0] === 'string' ? list[0] : list[0].value) : ''));
-				const items = [];
-				for (const option of list) {
-					const optionValue = typeof option === 'string' ? option : option.value;
-					const optionLabel = typeof option === 'string' ? option : option.label;
-					const tip = typeof option === 'string' ? undefined : option.tip;
-					items.push(
-						h(
-							'span',
-							{ key: optionValue, style: STYLE.radioItem },
-							h(
-								'label',
-								{ style: STYLE.radioLabel },
-								h('input', {
-									type: 'radio',
-									name: field.key,
-									value: optionValue,
-									'aria-label': field.label,
-									checked: optionValue === current,
-									onChange: () => onChange(field.key, optionValue),
-								}),
-								h('span', null, optionLabel),
-							),
-							// 选项自带说明（如「严格模式」的漏报提醒）时，后面跟一个 `?` 气泡。
-							tip === undefined ? null : h(TipBadge, { text: tip }),
-						),
-					);
-				}
-				control.push(h('div', { key: 'radio', style: STYLE.radioGroup }, items));
 			} else {
 				control.push(
 					h('input', {
 						key: 'text',
 						type: 'text',
-						style: STYLE.input,
+						className: 'ala-input',
+						'aria-label': field.label,
 						value: value === undefined || value === null ? '' : String(value),
 						onChange: (event) => onChange(field.key, event.target.value),
 					}),
 				);
 			}
-			// 单选的 help 放在**控件下方**（横向排列的选项 + 说明气泡都在控件区里，
-			// 左边那列只有字段名，否则长 help 会把选项挤到右边一窄条）。
-			const helpBelow = field.type === 'radio' && field.help !== undefined;
-			const controlStyle = helpBelow
-				? { ...STYLE.control, flexDirection: 'column', alignItems: 'flex-start', gap: 6 }
-				: STYLE.control;
 			return h(
 				'div',
-				{ style: STYLE.row },
+				{ className: 'ala-field' },
 				h(
 					'div',
-					{ style: STYLE.label },
-					field.label,
-					field.help && !helpBelow ? h('span', { style: STYLE.help }, field.help) : null,
+					null,
+					h('div', { className: 'ala-field-label' }, field.label),
+					field.help === undefined ? null : h('span', { className: 'ala-field-help' }, field.help),
 				),
-				h('div', { style: controlStyle }, helpBelow ? [...control, h('span', { key: 'help', style: STYLE.help }, field.help)] : control),
+				h('div', { className: 'ala-control' }, control),
 			);
 		}
 
@@ -1239,13 +1564,18 @@ window.__ModuleLoader__.load({
 		/** memo 后的字段行（渲染结果与 memo 前完全一致，只跳过无变化的重渲染）。 */
 		const FieldRow = React.memo(FieldRowBody, fieldRowEqual);
 
-		/** 渲染一个分区的主体：条件表在前（列名行 + 每行 ▶ 试听 + 4 个复选框，窄屏横向滚动），
-		 *  普通字段行在后（顺序＝SECTIONS 里 fields 的顺序）。
+		/** 渲染一个分区的主体。
+		 *
+		 *  - 条件表（`section.rows`）：自带 `.ala-table` 外壳（表头两行 + 每行 ▶/开关/文本框），
+		 *    因为那张表是「贴边」的，不套卡片背景；
+		 *  - 其余分区：所有字段行装进一张 `.ala-panel` 卡片（顺序＝SECTIONS 里 fields 的顺序）；
+		 *  - 协议模式：分段控件 + 一句说明（形态与其它字段行不同，单独一条分支）。
+		 *
 		 *  `voiceChoices` 是**调用方 `useMemo` 缓存好的**语音选项（带「需联网」后缀）：
 		 *  这里绝不能现算 `voicesWithHint(options.voices)`——每次渲染都造新数组会让
-		 *  `FieldRow` 的 `options` 引用一直变，那边刚加上的 memo 就全部失配了。 */
-		function renderSectionBody(section, values, update, options, audition, busy, voiceChoices) {
-			const nodes = [];
+		 *  `FieldRow` 的 `options` 引用一直变，那边刚加上的 memo 就全部失配了。
+		 *  `extras` 给专用行（铃声）用的两个回调：写状态栏 / 只响铃试听。 */
+		function renderSectionBody(section, values, update, options, audition, busy, voiceChoices, extras) {
 			const conditionRows = [];
 			for (const row of section.rows ?? []) {
 				conditionRows.push(
@@ -1260,17 +1590,47 @@ window.__ModuleLoader__.load({
 				);
 			}
 			if (conditionRows.length > 0) {
-				nodes.push(
+				return [
 					h(
 						'div',
-						{ key: `${section.id}-table`, style: STYLE.condTable },
+						{ key: `${section.id}-table`, className: 'ala-table' },
 						h(ConditionHeaderRow, { key: 'head', values, onChange: update }),
 						conditionRows,
 					),
-				);
+				];
 			}
+
+			const rows = [];
 			for (const field of section.fields ?? []) {
-				nodes.push(
+				if (field.type === 'segmented') {
+					rows.push(
+						h(
+							'div',
+							{ key: field.key },
+							h('div', { className: 'ala-control' }, h(ProtocolSegmented, { field, value: values[field.key], onChange: update })),
+							field.help === undefined
+								? null
+								: h('p', { className: 'ala-desc', style: { margin: '10px 0 0' } }, field.help),
+						),
+					);
+					continue;
+				}
+				if (field.type === 'sound') {
+					rows.push(
+						h(SoundFieldRow, {
+							key: field.key,
+							field,
+							value: values[field.key],
+							onChange: update,
+							wavs: options.wavs ?? [],
+							busy,
+							setStatus: extras.setStatus,
+							onAuditionSound: extras.onAuditionSound,
+						}),
+					);
+					continue;
+				}
+				rows.push(
 					h(FieldRow, {
 						key: field.key,
 						field,
@@ -1285,7 +1645,7 @@ window.__ModuleLoader__.load({
 					}),
 				);
 			}
-			return nodes;
+			return [h('div', { key: `${section.id}-panel`, className: 'ala-panel' }, rows)];
 		}
 
 		/** 设置卡片：设置页与「插件」页共用。
@@ -1681,126 +2041,150 @@ window.__ModuleLoader__.load({
 				setBusy('');
 			}, []);
 
+			/** 「铃声」区的 `▶ 试听`：**只响铃**，不弹窗也不播报。
+			 *  values 用页面当前值（含未保存改动），但强制 `popup:false, voice:false`——
+			 *  试听铃声时被一声 TTS 或一个弹窗打断，就分不清是谁在响。 */
+			const auditionSound = useCallback(async () => {
+				setBusy('audition:sound');
+				setStatus(null);
+				const current = latestValues.current;
+				const values = current === null || current === undefined ? current : { ...current, popup: false, voice: false };
+				const result = await api.post('test', { kind: 'test', values });
+				if (result.ok) {
+					const delivered = result.value?.delivered !== false;
+					const started = result.value?.scriptStarted !== false;
+					if (!delivered) {
+						setStatus({ kind: 'bad', text: '没有响：总开关或「铃声」通道是关的（看条件表勾选）' });
+					} else if (!started) {
+						setStatus({ kind: 'bad', text: '已投递，但报警脚本没真正启动——请重启 DSH 后再试。' });
+					} else {
+						setStatus({ kind: 'ok', text: `已按当前设置试听铃声：${String((values ?? {}).sound ?? '')}` });
+					}
+				} else {
+					setStatus({ kind: 'bad', text: `试听失败：${result.value?.error ?? result.status}` });
+				}
+				setBusy('');
+			}, []);
+
 			/** 语音下拉的选项（名字带 Neural 的加「需联网」后缀）。按 `options.voices` 的**引用**
 			 *  缓存：每次渲染都新建数组会让 `FieldRow` 的 `options` 引用一直变，
 			 *  那边刚加上的 `React.memo` 就全部失配（等于没加）。 */
 			const voiceChoices = useMemo(() => voicesWithHint(options.voices), [options.voices]);
 
+			/** 专用行（铃声）要的两个回调：引用必须稳定，否则带着 memo 的字段行每次渲染都重算。 */
+			const extras = useMemo(() => ({ setStatus, onAuditionSound: auditionSound }), [auditionSound]);
+
+			/** 样式表在这里兜底注入一次：卡片也可能**不经过任何弹窗**直接挂在设置页 / 插件页上。 */
+			useEffect(() => {
+				ensureStyle();
+			}, []);
+
 			if (error !== null && values === null) {
-				return h('div', { style: STYLE.card }, h('p', { style: { color: COLORS.bad, fontSize: 13 } }, error));
+				return h('div', { className: 'ala-root ala-standalone' }, h('p', { className: 'ala-loading ala-loading-bad' }, error));
 			}
 			if (values === null) {
-				return h('div', { style: STYLE.card }, h('p', { style: { color: COLORS.sub, fontSize: 13 } }, '正在载入报警设置…'));
+				return h('div', { className: 'ala-root ala-standalone' }, h('p', { className: 'ala-loading' }, '正在载入报警设置…'));
 			}
 
 			const sections = SECTIONS.map((section) =>
 				h(
-					'div',
-					{ key: section.id, style: STYLE.card },
-					h('h3', { style: STYLE.cardTitle }, section.title),
-					section.desc
-						? h(
-								'p',
-								{ style: { margin: '0 0 6px', fontSize: 12, color: COLORS.sub, lineHeight: '17px' } },
-								section.desc,
-							)
-						: null,
-					renderSectionBody(section, values, update, options, audition, busy, voiceChoices),
+					'section',
+					{ key: section.id, className: 'ala-section' },
+					h('div', { className: 'ala-section-head' }, h('span', { className: 'ala-section-title' }, section.title)),
+					section.desc ? h('p', { className: 'ala-desc' }, section.desc) : null,
+					renderSectionBody(section, values, update, options, audition, busy, voiceChoices, extras),
 				),
 			);
 
-			// 标题行 = 固定头：不参与滚动，`flex:'0 0 auto'` 保证不被正文压扁。
+			// 标题行 = 固定头：`flex:'0 0 auto'`（CSS 里）保证不被正文压扁，正文自己滚。
+			// 顺序是用户指定的：标题 → 「注册到：」三个勾选框 →（右推）编辑报警规则 → 重新载入
+			// → 恢复默认（琥珀）→ 保存（品牌蓝实心）→ ✕（只在弹窗里出现）。
 			const headerRow = h(
 				'div',
-				{ style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: '0 0 auto', marginTop: 0, marginBottom: 10, background: COLORS.bg, paddingTop: 10, paddingBottom: 10, borderBottom: `1px solid ${COLORS.border}` } },
-				// 标题在最左；右半边由标题后面的三个「注册范围」勾选框用 `marginRight:'auto'`
-				// （`STYLE.slotToggles`）撑开，把按钮组（编辑报警规则 / 重新载入 / 恢复默认 /
-				// 保存 / ❌）整组推到行尾。
-				h(
-					'span',
-					{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text } },
-					'报警提醒',
-				),
-				// 三个勾选框紧跟在标题后面（用户指定的位置）：控制这张卡片注册/显示在
-				// 主窗口（侧栏铃铛 + 设置浮层）/ 插件页 / 设置页——默认只有主窗口。
-				// 勾选走 `update()`，与其它字段同一条自动保存路径。
+				{ className: 'ala-head' },
+				h('span', { className: 'ala-title' }, '报警提醒'),
+				// 三个勾选框紧跟在标题后面：控制这张卡片注册/显示在主窗口（侧栏铃铛 + 设置浮层）
+				// / 插件页 / 设置页——默认只有主窗口。勾选走 `update()`，与其它字段同一条自动保存路径。
 				renderSlotToggles(values, update),
-				// 「编辑报警规则」放在「重新载入」**之前**（用户指定的位置）：它只是「看 + 复制」
-				// 规则的入口，不改配置；后面才是重新载入 / 保存 / ❌ 这组改配置的按钮。
-				// 四个入口（浮层弹窗 / 设置页 / 插件页 / 侧栏）都渲染同一张卡片，所以都会出现它。
 				h(
-					'button',
-					{
-						type: 'button',
-						style: STYLE.button,
-						title: '编辑报警规则',
-						'aria-label': '编辑报警规则',
-						onClick: () => setRulesDialogOpen(true),
-					},
-					'编辑报警规则',
+					'div',
+					{ className: 'ala-actions' },
+					// 「编辑报警规则」放在「重新载入」之前：它只是「看 + 复制」规则的入口，不改配置。
+					h(
+						'button',
+						{
+							type: 'button',
+							className: 'ala-btn',
+							title: '编辑报警规则',
+							'aria-label': '编辑报警规则',
+							onClick: () => setRulesDialogOpen(true),
+						},
+						'编辑报警规则',
+					),
+					h('button', { type: 'button', className: 'ala-btn', disabled: busy !== '', onClick: load }, '重新载入'),
+					// 「恢复默认」写的是「FIELDS 默认值」——先确认态再执行，避免一次误点把 72 个字段全刷掉。
+					h(
+						'button',
+						{
+							type: 'button',
+							className: 'ala-btn ala-btn-amber',
+							disabled: busy !== '' || !defaultsUsable,
+							title: defaultsUsable
+								? resetArmed
+									? '再点一次就把所有设置恢复为默认值并立即保存'
+									: '把所有设置恢复为默认值并立即保存'
+								: '默认值不可用，请先点「重新载入」',
+							'aria-label': '恢复默认',
+							onClick: resetToDefaults,
+						},
+						resetArmed ? '确认恢复？' : '恢复默认',
+					),
+					h(
+						'button',
+						{ type: 'button', className: 'ala-btn ala-btn-primary', disabled: busy !== '', onClick: save },
+						busy === 'save' ? '保存中…' : '保存',
+					),
+					// ✕ 只在弹窗里出现（设置页 / 插件页的卡片没有「关闭」这回事）。
+					typeof onRequestClose === 'function'
+						? h(
+								'button',
+								{
+									type: 'button',
+									className: 'ala-icon-btn',
+									title: '关闭',
+									'aria-label': '关闭',
+									onClick: onRequestClose,
+								},
+								'✕',
+							)
+						: null,
 				),
-				h('button', { type: 'button', style: STYLE.button, disabled: busy !== '', onClick: load }, '重新载入'),
-				// 「恢复默认」在「重新载入」之后、「保存」之前（用户指定的位置）：
-				// 它写配置，但写的是「FIELDS 默认值」——先确认态再执行，避免一次误点把 72 个字段全刷掉。
-				h(
-					'button',
-					{
-						type: 'button',
-						style: STYLE.button,
-						disabled: busy !== '' || !defaultsUsable,
-						title: defaultsUsable
-							? resetArmed
-								? '再点一次就把所有设置恢复为默认值并立即保存'
-								: '把所有设置恢复为默认值并立即保存'
-							: '默认值不可用，请先点「重新载入」',
-						'aria-label': '恢复默认',
-						onClick: resetToDefaults,
-					},
-					resetArmed ? '确认恢复？' : '恢复默认',
-				),
-				h('button', { type: 'button', style: STYLE.primary, disabled: busy !== '', onClick: save }, busy === 'save' ? '保存中…' : '保存'),
-				status !== null
-					? h(
-							'span',
-							{ style: { ...STYLE.status, color: status.kind === 'ok' ? COLORS.ok : COLORS.bad } },
-							status.text,
-						)
-					: null,
-				// ❌ 始终是这一行的最后一个元素；不再自己带 marginLeft:'auto'（标题已经撑开了）。
-				typeof onRequestClose === 'function'
-					? h(
-							'button',
-							{
-								type: 'button',
-								title: '关闭',
-								'aria-label': '关闭报警提醒',
-								onClick: onRequestClose,
-								style: { ...STYLE.button },
-							},
-							'❌',
-						)
-					: null,
 			);
 
-			// 滚动体：只有 fill 上下文才限高并自己滚（标题行因此永远不动）；
-			// 其它入口 style 为 null，保持「一页长卡片、由外层页面滚动」的老样子。
+			// 正文：只有 fill 上下文才限高并自己滚（标题行因此永远不动）。
 			const scrollBody = h(
 				'div',
-				{
-					'data-dsh-alarm-scroll': fill ? '1' : undefined,
-					style: fill
-						? { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain' }
-						: null,
-				},
+				{ className: 'ala-body', 'data-dsh-alarm-scroll': fill ? '1' : undefined },
 				sections,
 			);
 
-			return h(
+			// 底部状态栏：成功是绿点 + 文字，出错是红字；右侧那半句是常驻说明。
+			const footer = h(
 				'div',
-				{ style: fill ? { display: 'flex', flexDirection: 'column', minHeight: 0, maxHeight: '100%' } : null },
-				headerRow,
-				scrollBody,
+				{ className: 'ala-foot' },
+				status === null
+					? null
+					: h(
+							'span',
+							{ className: status.kind === 'ok' ? 'ala-status ala-status-ok' : 'ala-status ala-status-bad' },
+							status.kind === 'ok' ? h('span', { className: 'ala-dot', 'aria-hidden': true }) : null,
+							h('span', null, status.text),
+						),
+				h('span', { className: 'ala-foot-spacer' }),
+				h('span', null, '改动即时保存；「恢复默认」需点两次确认。'),
 			);
+
+			return h('div', { className: fill ? 'ala-root ala-fill' : 'ala-root ala-standalone' }, headerRow, scrollBody, footer);
 		}
 
 		/** 设置弹窗：遮罩 + 居中卡片（fixed 定位）。
@@ -1825,7 +2209,7 @@ window.__ModuleLoader__.load({
 			}, [onRequestClose]);
 
 			React.useEffect(() => {
-				ensureScrollStyle();
+				ensureStyle();
 			}, []);
 
 			/** Esc 关闭：只在弹窗挂着时监听，卸载时移除。 */
@@ -1848,15 +2232,7 @@ window.__ModuleLoader__.load({
 				'div',
 				{
 					// 遮罩：点空白处关闭（卡片上的 onClick 会 stopPropagation 拦下）。
-					style: {
-						position: 'fixed',
-						inset: 0,
-						background: 'rgba(0,0,0,0.35)',
-						display: 'flex',
-						alignItems: 'center',
-						justifyContent: 'center',
-						zIndex: 9999,
-					},
+					className: 'ala-frame',
 					onClick: close,
 				},
 				h(
@@ -1867,23 +2243,10 @@ window.__ModuleLoader__.load({
 						'aria-label': heading,
 						// 点卡片内部不关闭。
 						onClick: (event) => event?.stopPropagation?.(),
-						// 卡片自己**不滚**：只做「撑满 + 纵向 flex 容器」，滚动交给卡片内的
-						// 滚动体（`AlarmSettingsCard` 的 fill 结构）。这样标题行永远在顶部。
-						style: {
-							boxSizing: 'border-box',
-							maxWidth: '900px',
-							width: 'calc(100vw - 48px)',
-							maxHeight: '86vh',
-							overflow: 'hidden',
-							display: 'flex',
-							flexDirection: 'column',
-							border: `1px solid ${COLORS.border}`,
-							borderRadius: 12,
-							background: COLORS.bg,
-							color: COLORS.text,
-							boxShadow: '0 18px 48px rgba(0,0,0,0.32)',
-							padding: '14px 18px 18px',
-						},
+						// 弹窗框自己**只管外形**（宽 min(1040px, 100vw-48px)、圆角 12、投影、
+						// overflow hidden），内边距为 0：头部 / 正文 / 底部状态栏由卡片自己排，
+						// 这样滚动条贴着框边、头尾各自贴边（与视觉基准一致）。
+						className: 'ala-dialog',
 					},
 					h(AlarmSettingsCard, { onRequestClose: close, fill: true }),
 				),
@@ -2160,6 +2523,11 @@ window.__ModuleLoader__.load({
 				[],
 			);
 
+			/** 与设置弹窗同一套样式表：这个弹窗也走 `.ala-*`（幂等注入）。 */
+			useEffect(() => {
+				ensureStyle();
+			}, []);
+
 			/** 一键复制：优先 Clipboard API；不可用/被拒时回退「选中 textarea + execCommand('copy')」。
 			 *  受限 webview 或非安全上下文里 Clipboard API 常常不存在，这条回退是必需的。 */
 			const copy = useCallback(async () => {
@@ -2218,7 +2586,7 @@ window.__ModuleLoader__.load({
 				hints.push(
 					h(
 						'div',
-						{ key: 'missing', style: { fontSize: 12, color: COLORS.bad, marginBottom: 6 } },
+						{ key: 'missing', className: 'ala-hint' },
 						'规则文件缺失（docs/agent-output-prompt.md），请检查插件完整性',
 					),
 				);
@@ -2227,42 +2595,25 @@ window.__ModuleLoader__.load({
 				hints.push(
 					h(
 						'div',
-						{
-							key: 'error',
-							style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: COLORS.bad, marginBottom: 6 },
-						},
+						{ key: 'error', className: 'ala-hint-row' },
 						h('span', null, error),
 						h(
 							'button',
-							{ type: 'button', style: STYLE.auditionButton, onClick: () => setReloadSeq((seq) => seq + 1) },
+							{ type: 'button', className: 'ala-btn', onClick: () => setReloadSeq((seq) => seq + 1) },
 							'重新载入',
 						),
 					),
 				);
 			}
 			if (copyState === 'failed') {
-				hints.push(
-					h(
-						'div',
-						{ key: 'copy-failed', style: { fontSize: 12, color: COLORS.bad, marginBottom: 6 } },
-						'复制失败，请手动全选复制',
-					),
-				);
+				hints.push(h('div', { key: 'copy-failed', className: 'ala-hint' }, '复制失败，请手动全选复制'));
 			}
 
 			return h(
 				'div',
 				{
 					// 遮罩：点空白处关闭（卡片上的 onClick 会 stopPropagation 拦下）。
-					style: {
-						position: 'fixed',
-						inset: 0,
-						background: 'rgba(0,0,0,0.35)',
-						display: 'flex',
-						alignItems: 'center',
-						justifyContent: 'center',
-						zIndex: 9999,
-					},
+					className: 'ala-frame',
 					onClick: onRequestClose,
 				},
 				h(
@@ -2273,105 +2624,71 @@ window.__ModuleLoader__.load({
 						'aria-label': '编辑报警规则',
 						// 点卡片内部不关闭。
 						onClick: (event) => event?.stopPropagation?.(),
-						style: {
-							boxSizing: 'border-box',
-							maxWidth: '900px',
-							width: 'calc(100vw - 48px)',
-							maxHeight: '86vh',
-							// 至少 60vh 高：卡片高度**不再随内容塌陷**（原先规则块一长就只看得到
-							// 前两行，用户以为「规则没导入」）。正文 textarea 用 flex 撑满剩下的高度。
-							minHeight: '60vh',
-							overflow: 'hidden',
-							display: 'flex',
-							flexDirection: 'column',
-							border: `1px solid ${COLORS.border}`,
-							borderRadius: 12,
-							background: COLORS.bg,
-							color: COLORS.text,
-							boxShadow: '0 18px 48px rgba(0,0,0,0.32)',
-							padding: '14px 18px 18px',
-						},
+						// 与设置弹窗同一套框（`.ala-dialog`），外加 `minHeight: 60vh`：
+						// 卡片高度**不再随内容塌陷**（原先规则块一长就只看得到前两行，
+						// 用户以为「规则没导入」）。正文 textarea 用 flex 撑满剩下的高度。
+						className: 'ala-dialog ala-dialog-rules',
 					},
-					// 头部：标题 + 一键复制 + ❌。
+					// 头部：标题 + 字符数 + 一键复制 + ✕。
 					h(
 						'div',
-						{
-							style: {
-								display: 'flex',
-								alignItems: 'center',
-								gap: 10,
-								flex: '0 0 auto',
-								marginBottom: 10,
-								paddingBottom: 10,
-								borderBottom: `1px solid ${COLORS.border}`,
-							},
-						},
-						h(
-							'span',
-							{ style: { fontSize: 15, fontWeight: 600, color: COLORS.text } },
-							'编辑报警规则',
-						),
+						{ className: 'ala-head' },
+						h('span', { className: 'ala-title' }, '编辑报警规则'),
 						// 标题右侧一行小字：字符数。规则块很长时给出「确实拿到了全文」的证据
 						// （用户就是把塌陷出来的两行误判成「没导入」）；正文为空时显示 —。
 						h(
 							'span',
 							{
-								style: { fontSize: 11.5, color: COLORS.sub, marginRight: 'auto' },
+								className: 'ala-muted',
 								'aria-label': text === '' ? '规则正文为空' : `规则正文共 ${text.length} 字符`,
 							},
 							text === '' ? '—' : `共 ${text.length} 字符`,
 						),
 						h(
-							'button',
-							{
-								type: 'button',
-								style: STYLE.button,
-								title: '一键复制',
-								'aria-label': '一键复制',
-								onClick: () => {
-									void copy();
+							'div',
+							{ className: 'ala-actions' },
+							h(
+								'button',
+								{
+									type: 'button',
+									className: 'ala-btn',
+									title: '一键复制',
+									'aria-label': '一键复制',
+									onClick: () => {
+										void copy();
+									},
 								},
-							},
-							copyState === 'copied' ? '已复制' : '一键复制',
-						),
-						h(
-							'button',
-							{
-								type: 'button',
-								style: STYLE.button,
-								title: '关闭',
-								'aria-label': '关闭报警规则',
-								onClick: onRequestClose,
-							},
-							'❌',
+								copyState === 'copied' ? '已复制' : '一键复制',
+							),
+							h(
+								'button',
+								{
+									type: 'button',
+									className: 'ala-icon-btn',
+									title: '关闭',
+									'aria-label': '关闭报警规则',
+									onClick: onRequestClose,
+								},
+								'✕',
+							),
 						),
 					),
-					hints.length > 0 ? h('div', { style: { flex: '0 0 auto' } }, hints) : null,
-					// 正文：只读 textarea（规则块里的换行原样保留）。
-					// `flex:'1 1 auto' + minHeight:0` 让它撑满卡片剩余高度（卡片本身 minHeight 60vh），
-					// `resize:'none'` 关掉手动拖拽——高度由 flex 决定，再拖就会顶破卡片。
-					h('textarea', {
-						ref: textareaRef,
-						readOnly: true,
-						spellCheck: false,
-						'aria-label': '报警规则',
-						value: text,
-						style: {
-							flex: '1 1 auto',
-							minHeight: 0,
-							width: '100%',
-							boxSizing: 'border-box',
-							resize: 'none',
-							fontFamily: 'ui-monospace,Consolas,monospace',
-							fontSize: 12.5,
-							lineHeight: '18px',
-							padding: '10px 12px',
-							borderRadius: 8,
-							border: `1px solid ${COLORS.border}`,
-							background: COLORS.field,
-							color: COLORS.text,
-						},
-					}),
+					h(
+						'div',
+						{ className: 'ala-dialog-body' },
+						hints.length > 0 ? h('div', { key: 'hints' }, hints) : null,
+						// 正文：只读 textarea（规则块里的换行原样保留）。
+						// `flex:'1 1 auto' + minHeight:0`（CSS 里）让它撑满卡片剩余高度，
+						// `resize:none` 关掉手动拖拽——高度由 flex 决定，再拖就会顶破卡片。
+						h('textarea', {
+							ref: textareaRef,
+							readOnly: true,
+							spellCheck: false,
+							'aria-label': '报警规则',
+							className: 'ala-rule-text',
+							value: text,
+						}),
+					),
 				),
 			);
 		}
