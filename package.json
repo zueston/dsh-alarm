@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "dsh-alarm",
   "version": "1.5.0",
   "description": "DSH 独立提醒报警插件：root 会话需要用户裁决或本轮结束时，用 PowerShell 播放铃声、TTS 语音并弹窗；带可视化设置页与侧边栏入口。",
