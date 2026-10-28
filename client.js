@@ -171,6 +171,9 @@ window.__ModuleLoader__.load({
 		const configCacheListeners = new Set();
 		/** 正在飞的请求（并发保护）：多个卡片同时挂载也只发一次 GET。 */
 		let configInFlight = null;
+		/** `apply()` 里那个「按配置对账槽位注册」的订阅器：只留一个
+		 *  （插件热升级会再跑一次 `apply()`，旧的订阅先摘掉，免得同一次变化被对账两遍）。 */
+		let slotSyncListener = null;
 
 		function setConfigCache(patch) {
 			configCache = { ...configCache, ...patch };
@@ -240,6 +243,110 @@ window.__ModuleLoader__.load({
 			const cache = useConfigCache();
 			const value = cache?.values?.[key];
 			return typeof value === 'boolean' ? value : SLOT_DEFAULT_OF[key] === true;
+		}
+
+		// ------------------------------------------------------------------
+		// 注册范围关掉之后：说明卡 + 「在这里重新开启」
+		// ------------------------------------------------------------------
+
+		/** 说明卡的标题与按钮文案（**逐字固定**，离线自测逐字断言这两句）。 */
+		const SLOT_CLOSED_TITLE = '这个位置已关闭。';
+		const SLOT_REOPEN_LABEL = '在这里重新开启';
+
+		/** 说明卡次行：告诉用户去哪里把这一处勾回来（勾选路径 + 备用按钮）。 */
+		function slotClosedHint(slotLabel) {
+			return `在「主窗口 → 报警提醒 → 注册到」里勾上「${slotLabel}」即可恢复；或点下面按钮。`;
+		}
+
+		/** 把某个注册范围**写回配置**（只改一个键）：说明卡的「在这里重新开启」用它。
+		 *
+		 *  走的是与标题行那个勾选框**同一条** `POST config`（带 `expected` 乐观并发锁），成功后
+		 *  **回写模块级缓存**——订阅方（`useSlotEnabled()` 与 `apply()` 里的注册对账）立刻重渲染 /
+		 *  重新注册，按钮点完这一处就真的回来了。
+		 *  返回 false = 没开成（网络错 / 服务端拒绝），由按钮显示重试；409（磁盘被别处改过）
+		 *  顺手把最新值写回缓存，用户再点一次就带着正确的 `expected`。 */
+		async function enableSlot(key) {
+			let cache = configCache;
+			if (cache.status !== 'ok' || cache.values === null || cache.values === undefined) {
+				cache = await refreshConfig(true);
+			}
+			const values = cache?.values ?? null;
+			if (values === null || values === undefined) return false;
+			const result = await api.post('config', { expected: cache.expected ?? values, values: { ...values, [key]: true } });
+			if (!result.ok) {
+				const fresh = result.value?.values ?? null;
+				if (result.status === 409 && fresh !== null) {
+					setConfigCache({
+						status: 'ok',
+						values: fresh,
+						expected: fresh,
+						defaults: result.value?.defaults ?? configCache.defaults,
+						error: null,
+					});
+				}
+				return false;
+			}
+			const saved = result.value?.values ?? { ...values, [key]: true };
+			setConfigCache({
+				status: 'ok',
+				values: saved,
+				expected: result.value?.expected ?? saved,
+				defaults: result.value?.defaults ?? configCache.defaults,
+				options: result.value?.options ?? configCache.options,
+				error: null,
+			});
+			return saved[key] === true;
+		}
+
+		/** 这处槽位能不能注销：`ctx.slots.register` 的返回值是条目 disposer，
+		 *  `ctx.slots.inject` 的返回值（若有）是外层挂载器——任一层给了就算能。
+		 *  两层都拿不到时条目摘不掉，组件只能自己兜底成说明卡（见 `SlotClosedCard`）。 */
+		function slotDisposable(handle) {
+			return typeof handle?.dispose === 'function' || typeof handle?.injectDispose === 'function';
+		}
+
+		/** 「这个位置已关闭」说明卡：某个注册范围关掉、而这一处的**条目摘不掉**时用它占住这块地方。
+		 *
+		 *  **为什么不是 `return null`**：设置页 / 插件页的导航条目是宿主按槽位注册元数据画出来的，
+		 *  组件返回 null 只清内容、摘不掉条目——用户看到的就是一条点进去空白的「报警提醒」。
+		 *  `plugins.bundle.config` 更彻底：插件页的列表条目来自 profile 清单（bundle 注册），
+		 *  根本没有注销接口，只能这样兜底，绝不留空白。
+		 *  视觉只用既有 `.ala-*` 体系（`.ala-panel` 卡片 + `.ala-desc` 次行 + 主按钮），不新造样式。 */
+		function SlotClosedCard({ slotKey, slotLabel }) {
+			const [busy, setBusy] = React.useState(false);
+			const [failed, setFailed] = React.useState(false);
+			const reopen = () => {
+				if (busy) return;
+				setBusy(true);
+				setFailed(false);
+				void (async () => {
+					let opened = false;
+					try {
+						opened = await enableSlot(slotKey);
+					} catch {
+						opened = false;
+					}
+					setBusy(false);
+					// 成功不必在这里改任何状态：缓存一变，注册对账会把这处重新挂上（或卡片换回真身）。
+					if (!opened) setFailed(true);
+				})();
+			};
+			return h(
+				'div',
+				{ className: 'ala-panel' },
+				h('div', { className: 'ala-section-title' }, SLOT_CLOSED_TITLE),
+				h('p', { className: 'ala-desc' }, slotClosedHint(slotLabel)),
+				h(
+					'div',
+					{ className: 'ala-inline' },
+					h(
+						'button',
+						{ type: 'button', className: 'ala-btn ala-btn-primary', disabled: busy, onClick: reopen },
+						busy ? '正在开启…' : SLOT_REOPEN_LABEL,
+					),
+				),
+				failed ? h('p', { className: 'ala-hint' }, '开启失败，请稍后重试。') : null,
+			);
 		}
 
 		// ------------------------------------------------------------------
@@ -2462,21 +2569,31 @@ window.__ModuleLoader__.load({
 		 *  侧栏那条要当场消失，不需要重载页面。 */
 		function SidebarEntry(props) {
 			const mainEnabled = useSlotEnabled('showInMain');
-			if (!mainEnabled) return null;
-			return h(AlarmPanelIcon, props);
+			if (mainEnabled) return h(AlarmPanelIcon, props);
+			// 正常路径：`apply()` 已经把条目注销了，这里只是兜底。
+			// 拿不到 disposer 时条目摘不掉——那就把整块换成说明卡，绝不留一条空侧栏行。
+			if (slotDisposable(props?.slot)) return null;
+			return h('div', { style: { padding: '4px 0' } }, h(SlotClosedCard, { slotKey: 'showInMain', slotLabel: '主窗口' }));
 		}
 
-		/** `settings.section` 的注册体：设置页卡片，只在 `showInSettings` 为真时渲染。 */
+		/** `settings.section` 的注册体：设置页卡片，只在 `showInSettings` 为真时渲染。
+		 *
+		 *  关掉时**一律渲染说明卡**（不再 `return null`）：正常路径下这条导航已经由 `apply()`
+		 *  注销掉、组件根本不会被渲染；万一注销不掉（宿主不给 disposer）或配置还没读到时，
+		 *  用户看到的是一句「这个位置已关闭」和重新开启按钮，而不是一条点进去空白的导航。 */
 		function SettingsSectionEntry() {
 			const settingsEnabled = useSlotEnabled('showInSettings');
-			if (!settingsEnabled) return null;
-			return h('div', { style: { padding: '4px 0' } }, h(AlarmSettingsCard, {}));
+			if (settingsEnabled) return h('div', { style: { padding: '4px 0' } }, h(AlarmSettingsCard, {}));
+			return h('div', { style: { padding: '4px 0' } }, h(SlotClosedCard, { slotKey: 'showInSettings', slotLabel: '设置页' }));
 		}
 
-		/** `plugins.bundle.config` 的注册体：插件页卡片，只在 `showInPlugins` 为真时渲染。 */
+		/** `plugins.bundle.config` 的注册体：插件页卡片，只在 `showInPlugins` 为真时渲染。
+		 *
+		 *  **这一处摘不掉**：插件页的列表条目来自 profile 清单（bundle 注册），没有注销接口。
+		 *  所以关掉「插件页」时**不能**返回 null（那会在插件页留一块空白），而是渲染说明卡。 */
 		function PluginsConfigEntry() {
 			const pluginsEnabled = useSlotEnabled('showInPlugins');
-			if (!pluginsEnabled) return null;
+			if (!pluginsEnabled) return h(SlotClosedCard, { slotKey: 'showInPlugins', slotLabel: '插件页' });
 			return h(AlarmSettingsCard, {});
 		}
 
@@ -2763,20 +2880,104 @@ window.__ModuleLoader__.load({
 				try {
 					void refreshConfig();
 				} catch {}
+				// ---- 可注销的两处槽位（侧栏 / 设置页）----------------------------------
+				// 宿主的导航项来自**槽位注册元数据**，组件里 `return null` 只能清内容、摘不掉那条
+				// 导航条目（用户看到的就是一条点进去空白的「报警提醒」）。所以这两处必须按配置
+				// **动态注册 / 注销**：勾掉就注销、勾上就重新注册。
+				/** 一处槽位的挂载句柄。
+				 *  `dispose` = `ctx.slots.register(...)` 的返回值（槽位条目的注销器）；
+				 *  `injectDispose` = `ctx.slots.inject(...)` 的返回值（外层挂载器，宿主可能不给）。
+				 *  两者**都可能是 undefined**：这时候条目摘不掉，只能靠组件自己兜底成说明卡。
+				 *  `mounted` 是「已注册」标志——两个返回值都没有时也算挂上了。 */
+				const slotHandles = {
+					sidebar: { mounted: false, dispose: null, injectDispose: null },
+					settings: { mounted: false, dispose: null, injectDispose: null },
+				};
+
+				/** 挂上一处槽位：`registerEntry()` 负责 `ctx.slots.register(...)` 并返回条目 disposer。 */
+				const mountSlot = (handle, name, registerEntry) => {
+					if (handle.mounted) return;
+					handle.mounted = true;
+					try {
+						const injected = ctx.slots.inject(name, () => {
+							const dispose = registerEntry();
+							handle.dispose = typeof dispose === 'function' ? dispose : null;
+							return handle.dispose;
+						});
+						handle.injectDispose = typeof injected === 'function' ? injected : null;
+					} catch (error) {
+						// 注册失败就把标志回滚，别让「已挂」的假象挡住下一次重试。
+						handle.mounted = false;
+						handle.dispose = null;
+						handle.injectDispose = null;
+						throw error;
+					}
+				};
+
+				/** 注销一处槽位：**先摘条目**（`register` 的 disposer），再撤 `inject`（若有）。 */
+				const unmountSlot = (handle) => {
+					if (!handle.mounted) return;
+					handle.mounted = false;
+					const { dispose, injectDispose } = handle;
+					handle.dispose = null;
+					handle.injectDispose = null;
+					try {
+						if (typeof dispose === 'function') dispose();
+					} catch {}
+					try {
+						if (typeof injectDispose === 'function') injectDispose();
+					} catch {}
+				};
+
 				// 每个槽位组件都过 guarded()：渲染期抛错只让这一块变空，绝不让整页白屏。
-				ctx.slots.inject('sidebar.panellist', () =>
-					ctx.slots.register(
-						{
-							name: 'sidebar.panellist',
-							id: NS,
-							order: 33,
-							label: () => '报警提醒',
-						},
-						// 图标只置「要弹窗」的标志，弹窗本体由下面的 shell.overlay 层渲染。
-						// 注册体是 `SidebarEntry`：`showInMain` 关掉时它渲染 null（侧栏无入口）。
-						guarded('sidebar.panellist', (props) => h(SidebarEntry, { ...props, ctx })),
-					),
-				);
+				const mountSidebar = () =>
+					mountSlot(slotHandles.sidebar, 'sidebar.panellist', () =>
+						ctx.slots.register(
+							{
+								name: 'sidebar.panellist',
+								id: NS,
+								order: 33,
+								label: () => '报警提醒',
+							},
+							// 图标只置「要弹窗」的标志，弹窗本体由下面的 shell.overlay 层渲染。
+							// 注册体是 `SidebarEntry`：`showInMain` 关掉时它渲染 null（条目已由上面注销）。
+							guarded('sidebar.panellist', (props) => h(SidebarEntry, { ...props, ctx, slot: slotHandles.sidebar })),
+						),
+					);
+				const mountSettings = () =>
+					mountSlot(slotHandles.settings, 'settings.section', () =>
+						ctx.slots.register(
+							{
+								name: 'settings.section',
+								id: NS,
+								order: 51,
+								label: () => '报警提醒',
+							},
+							// 注册体自带开关（双保险）：`showInSettings` 关掉时渲染说明卡。
+							guarded('settings.section', () => h(SettingsSectionEntry, {})),
+						),
+					);
+
+				/** 按**当前配置**对账：为真且未挂 → 挂；为假且已挂 → 注销。
+				 *  只影响「注册与否」，组件内部的 `useSlotEnabled()` 判断保留（双保险）。
+				 *  缓存还没就绪时按 schema 默认值走（与 `useSlotEnabled()` 同一口径）。 */
+				const syncSlotRegistrations = (cache) => {
+					const values = cache?.values ?? null;
+					const isOn = (key) => {
+						const value = values?.[key];
+						return typeof value === 'boolean' ? value : SLOT_DEFAULT_OF[key] === true;
+					};
+					try {
+						if (isOn('showInMain')) mountSidebar();
+						else unmountSlot(slotHandles.sidebar);
+						if (isOn('showInSettings')) mountSettings();
+						else unmountSlot(slotHandles.settings);
+					} catch {}
+				};
+
+				// **首帧先注册**：先照旧把两处挂上（避免配置还没回来时导航项少一条、闪一下），
+				// 缓存一落地就由 apply() 末尾的订阅把不该在的那处注销掉。
+				mountSidebar();
 				// 设置弹窗：宿主官方浮层槽位（**不再用 portal**）。
 				ctx.slots.inject('shell.overlay', () =>
 					ctx.slots.register(
@@ -2803,28 +3004,26 @@ window.__ModuleLoader__.load({
 						guarded('shell.overlay:rules', () => h(RulesDialogLayer, {})),
 					),
 				);
-				ctx.slots.inject('settings.section', () =>
-					ctx.slots.register(
-						{
-							name: 'settings.section',
-							id: NS,
-							order: 51,
-							label: () => '报警提醒',
-						},
-						// 注册体自带开关：`showInSettings` 关掉时渲染 null（等于这一页没有这张卡片）。
-						guarded('settings.section', () => h(SettingsSectionEntry, {})),
-					),
-				);
+				mountSettings();
 				ctx.slots.inject('plugins.bundle.config', () =>
 					ctx.slots.register(
 						{
 							name: 'plugins.bundle.config',
 							key: NS,
 						},
-						// 注册体自带开关：`showInPlugins` 关掉时渲染 null。
+						// 注册体自带开关：`showInPlugins` 关掉时渲染**说明卡**——插件页的列表条目
+						// 来自 profile 清单（bundle 注册），摘不掉，所以不能返回 null 留一块空白。
 						guarded('plugins.bundle.config', () => h(PluginsConfigEntry, {})),
 					),
 				);
+
+				// 配置一变就重新对账（订阅的是同一个模块级缓存）：勾掉「设置页」→ 设置面板左侧
+				// 那条当场消失，勾回来 → 当场回来；侧边栏（`sidebar.panellist`）同款行为。
+				// 缓存此刻已经就绪（插件热升级后又跑了一遍 apply）时立刻对账一次，不等下一次变化。
+				if (slotSyncListener !== null) configCacheListeners.delete(slotSyncListener);
+				slotSyncListener = (cache) => syncSlotRegistrations(cache);
+				configCacheListeners.add(slotSyncListener);
+				if (configCache.status === 'ok') syncSlotRegistrations(configCache);
 			},
 		};
 	},

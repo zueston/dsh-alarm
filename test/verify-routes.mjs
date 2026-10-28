@@ -755,10 +755,14 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
     useState(init) {
       const index = frame.index++;
       if (!(index in frame.hooks)) frame.hooks[index] = typeof init === 'function' ? init() : init;
+      // **捕获本帧**：`frame` 是全局变量，effect 是在 `renderTree` 把 frame 还原之后
+      // 才跑的（见上面 renderTree 的 finally），所以 setter 不能读全局 frame——
+      // 那样在 effect 里 setState 会撞到 `frame === null`。
+      const own = frame;
       const set = (next) => {
-        frame.hooks[index] = typeof next === 'function' ? next(frame.hooks[index]) : next;
+        own.hooks[index] = typeof next === 'function' ? next(own.hooks[index]) : next;
       };
-      return [frame.hooks[index], set];
+      return [own.hooks[index], set];
     },
     useEffect(fn) {
       frame.index += 1;
@@ -947,6 +951,7 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   const card = firstMount.card;
 
   // ---- 条件表：10 行 × (4 开关 + 1 播报文本) ----
+  // 四个开关 = 提醒 / 弹窗 / 铃声 / 语音播报。
   const conditionRows = findAll(card, (item) => item.props.className === 'ala-trow');
   assert.strictEqual(conditionRows.length, 10, `条件表应有 10 行，实际 ${conditionRows.length}`);
   for (const [index, row] of conditionRows.entries()) {
@@ -1140,6 +1145,188 @@ if (process.env.DSH_ALARM_TEST_RING === '1') {
   // 那 10 个键仍在键表里（TTS 分区搬走不等于字段消失）。
   const tenVoiceKeys = ['Ask', 'Plan', 'TaskComplete', 'TurnEnd', 'Interrupt', 'Error', 'Stalled', 'AwaitingTest', 'Restart', 'Test'];
   for (const kind of tenVoiceKeys) assert.ok(viewMod.missingFieldKeys({}).includes(`voiceText${kind}`), `键表缺 voiceText${kind}`);
+  // ---------------- 注册范围关掉 → 槽位**注销**（bug 回归：导航条目不许留着） ----------------
+  // 用户报的 bug：只勾了「主窗口」，`showInSettings` 是关的，但设置面板左侧**仍然有一条**
+  // 「报警提醒」，点进去是空白。根因：宿主导航项来自**槽位注册元数据**，组件里 `return null`
+  // 只清内容、摘不掉条目。修法是 `apply()` 保存 `register`/`inject` 的返回值并按配置动态注销。
+  // 下面用假 ctx 把这条链走一遍：记录 register 调用与 disposer 调用次数。
+  {
+    const slotOptions = { wavs: ['Alarm03.wav', 'notify.wav'], voices: ['Microsoft Huihui Desktop'] };
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    /** 装一次 client.js + 假 ctx。
+     *  `values` 是 GET /config 的返回（**可变**：POST 成功会整体覆盖它，模拟磁盘变化）；
+     *  `options.registerDisposer:false` / `injectDisposer:false` 用来模拟宿主不给注销能力。 */
+    async function mountSlots(initialValues, options = {}) {
+      let values = { ...initialValues };
+      const writes = [];
+      const calls = { inject: [], register: [], dispose: {} };
+      const fetchStub2 = async (url, init) => {
+        const method = init?.method ?? 'GET';
+        if (method === 'POST') {
+          const payload = JSON.parse(String(init?.body ?? '{}'));
+          const saved = { ...payload.values };
+          writes.push(saved);
+          values = saved;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ values: saved, expected: saved, defaults: saved, options: slotOptions }),
+          };
+        }
+        const snap = { ...values };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ values: snap, expected: snap, defaults: snap, options: slotOptions }),
+        };
+      };
+      let factory2 = null;
+      new Function('window', 'fetch', 'Headers', 'document', viewSource)(
+        {
+          __ModuleLoader__: {
+            load(entry) {
+              factory2 = entry.factory;
+            },
+          },
+        },
+        fetchStub2,
+        class Headers {},
+        undefined,
+      );
+      assert.ok(factory2 !== null, 'client.js 没有调用 __ModuleLoader__.load（槽位注销段）');
+      const inst = factory2(() => MiniReact);
+      const registered2 = [];
+      const ctx = {
+        slots: {
+          inject(name, register) {
+            calls.inject.push(name);
+            const dispose = register();
+            if (options.injectDisposer === false) return undefined;
+            return () => {
+              calls.dispose[`${name}#inject`] = (calls.dispose[`${name}#inject`] ?? 0) + 1;
+            };
+          },
+          register(spec, component) {
+            calls.register.push(spec.name);
+            registered2.push({ spec, component });
+            if (options.registerDisposer === false) return undefined;
+            return () => {
+              calls.dispose[spec.name] = (calls.dispose[spec.name] ?? 0) + 1;
+            };
+          },
+        },
+      };
+      inst.apply(ctx);
+      // **同步**（配置还没回来）那一刻的注册条数：这就是「首帧先注册、不闪烁」。
+      const firstFrame = calls.register.slice();
+      await flush();
+      const findEntry = (name) => registered2.find((entry) => entry.spec.name === name) ?? null;
+      return {
+        mod: inst,
+        values: () => values,
+        writes,
+        calls,
+        registered: registered2,
+        firstFrame,
+        findEntry,
+        countOf: (name) => calls.register.filter((item) => item === name).length,
+        disposedOf: (name) => calls.dispose[name] ?? 0,
+        render: (entry) => renderTree(MiniReact.createElement(entry.component, {})),
+      };
+    }
+
+    const slotsBase = { ...snapshot, showInMain: true, showInPlugins: true, showInSettings: true };
+
+    // ---- 1) 首帧即注册（不闪烁）：apply() 同步跑完就已经是 5 条 ----
+    // ---- 2) 关「设置页」→ 那条 disposer 被调用 1 次，且不许再注册一条 ----
+    const offSettings = await mountSlots({ ...slotsBase, showInSettings: false });
+    assert.strictEqual(offSettings.firstFrame.length, 5, `首帧应即注册 5 条（不闪烁），实际 ${offSettings.firstFrame.length}`);
+    assert.deepStrictEqual(offSettings.firstFrame, [
+      'sidebar.panellist',
+      'shell.overlay',
+      'shell.overlay',
+      'settings.section',
+      'plugins.bundle.config',
+    ], '首帧注册顺序应与 apply() 里的挂载顺序一致');
+    assert.strictEqual(offSettings.calls.register.length, 5, `初始注册 5 条不变，实际 ${offSettings.calls.register.length}`);
+    assert.strictEqual(offSettings.disposedOf('settings.section'), 1, '配置为 showInSettings:false 时应注销 settings.section 那条（恰好 1 次）');
+    assert.strictEqual(offSettings.countOf('settings.section'), 1, '注销之后不许再注册新的 settings.section（导航条目要真的消失）');
+    assert.strictEqual(offSettings.disposedOf('sidebar.panellist'), 0, '关「设置页」不该牵连侧边栏');
+
+    // 注销不掉（没有 disposer）时那条导航还在——组件必须渲染说明卡，绝不能是空白页。
+    const closedCard = offSettings.render(offSettings.findEntry('settings.section'));
+    assert.ok(closedCard !== null, '关掉「设置页」后注册体渲染成了 null（那就是用户看到的空白页）');
+    const closedTexts = texts(closedCard);
+    assert.ok(closedTexts.includes('这个位置已关闭。'), `说明卡缺「这个位置已关闭。」：${closedTexts.join('|')}`);
+    assert.ok(closedTexts.includes('在这里重新开启'), `说明卡缺「在这里重新开启」按钮：${closedTexts.join('|')}`);
+    const settingsReopen = findBy(closedCard, (item) => item.type === 'button');
+    assert.ok(settingsReopen !== null, '说明卡上找不到「在这里重新开启」按钮');
+    assert.strictEqual(settingsReopen.props.disabled, false, '按钮初始不该是 disabled');
+
+    // ---- 3) 点「在这里重新开启」→ 写配置 → **重新注册**（累计 2 次注册）----
+    settingsReopen.props.onClick({});
+    await flush();
+    await flush();
+    assert.strictEqual(offSettings.writes.length, 1, `「在这里重新开启」应只提交一次，实际 ${offSettings.writes.length}`);
+    assert.strictEqual(offSettings.writes[0].showInSettings, true, '提交的值里 showInSettings 必须是 true');
+    assert.strictEqual(offSettings.countOf('settings.section'), 2, `重新开启后应再注册一条（累计 2 次），实际 ${offSettings.countOf('settings.section')}`);
+    assert.strictEqual(offSettings.disposedOf('settings.section'), 1, '只该注销过第一次那条（累计仍是 1 次）');
+    // 缓存已经变成「开」，注册体换回真身（说明卡消失）。
+    const reopenedSettings = offSettings.render(offSettings.findEntry('settings.section'));
+    assert.strictEqual(
+      texts(reopenedSettings).includes('这个位置已关闭。'),
+      false,
+      '重新开启后不该再渲染说明卡（应换回设置卡片本体）',
+    );
+
+    // ---- 4) 关「主窗口」→ 侧栏条目注销，两个 shell.overlay 也随之为空 ----
+    const offMain = await mountSlots({ ...slotsBase, showInMain: false });
+    assert.strictEqual(offMain.calls.register.length, 5, `初始注册仍是 5 条，实际 ${offMain.calls.register.length}`);
+    assert.strictEqual(offMain.disposedOf('sidebar.panellist'), 1, '配置为 showInMain:false 时应注销 sidebar.panellist（恰好 1 次）');
+    assert.strictEqual(offMain.countOf('sidebar.panellist'), 1, '注销之后不许再注册新的 sidebar.panellist（侧栏那行要真的消失）');
+    assert.strictEqual(offMain.disposedOf('settings.section'), 0, '关「主窗口」不该牵连设置页');
+    const overlayEntries = offMain.registered.filter((entry) => entry.spec.name === 'shell.overlay');
+    assert.strictEqual(overlayEntries.length, 2, '两个弹窗仍各占一条 shell.overlay');
+    for (const entry of overlayEntries) {
+      assert.strictEqual(offMain.render(entry), null, `${entry.spec.id} 在「主窗口」关掉后不该还渲染出东西`);
+    }
+
+    // ---- 5) 宿主不给 disposer → 插件页（摘不掉的条目）渲染说明卡，按钮能把这一处开回来 ----
+    const noDispose = await mountSlots(
+      { ...slotsBase, showInPlugins: false },
+      { registerDisposer: false, injectDisposer: false },
+    );
+    assert.strictEqual(noDispose.calls.register.length, 5, '拿不到 disposer 时注册条数照旧（5 条，只是摘不掉）');
+    assert.strictEqual(Object.keys(noDispose.calls.dispose).length, 0, '没有 disposer 就不该有任何注销调用');
+    const pluginCard = noDispose.render(noDispose.findEntry('plugins.bundle.config'));
+    assert.ok(pluginCard !== null, '关掉「插件页」后渲染成了 null（插件页会留一块空白）');
+    const pluginTexts = texts(pluginCard).join('\n');
+    assert.ok(pluginTexts.includes('这个位置已关闭。'), `插件页说明卡缺「这个位置已关闭。」：${pluginTexts}`);
+    assert.ok(pluginTexts.includes('在这里重新开启'), `插件页说明卡缺「在这里重新开启」：${pluginTexts}`);
+    assert.ok(pluginTexts.includes('插件页'), '说明卡次行必须指明是「插件页」这个位置');
+    assert.ok(
+      pluginTexts.includes('在「主窗口 → 报警提醒 → 注册到」里勾上「插件页」即可恢复；或点下面按钮。'),
+      `说明卡次行文案不符：${pluginTexts}`,
+    );
+    const pluginReopen = findBy(pluginCard, (item) => item.type === 'button');
+    assert.ok(pluginReopen !== null, '插件页说明卡上找不到「在这里重新开启」按钮');
+    pluginReopen.props.onClick({});
+    await flush();
+    await flush();
+    assert.strictEqual(noDispose.writes.at(-1).showInPlugins, true, '点「在这里重新开启」必须把 showInPlugins 写成 true');
+    const pluginReopened = noDispose.render(noDispose.findEntry('plugins.bundle.config'));
+    assert.strictEqual(
+      texts(pluginReopened).includes('这个位置已关闭。'),
+      false,
+      '重新开启后插件页应换回设置卡片本体',
+    );
+    assert.ok(texts(pluginReopened).includes('注册到：'), '重新开启后应渲染出设置卡片（标题行的「注册到：」）');
+    console.log(
+      'client 槽位注销 ok: 首帧注册 5 条（含 settings.section 1 次）→ 关「设置页」注销 1 次且无新注册 → 「在这里重新开启」再注册（累计 2 次）→ 关「主窗口」注销 sidebar 且 2 条 shell.overlay 全空 → 无 disposer 时渲染说明卡并可开回',
+    );
+  }
+
   console.log(
     'client 渲染结构 ok: 条件表 %d 行 × (4 开关 + 1 播报文本)、表头 2 行 × 7 列（4 个总开关）、协议模式分段 2 项、? 徽标点开自绘卡片（%d 字符、无 title 属性、开合 0→1 个 tooltip 节点）、TTS 分区无逐条件字段',
     conditionRows.length,
